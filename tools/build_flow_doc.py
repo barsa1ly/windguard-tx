@@ -475,7 +475,8 @@ SOURCES = [
     ("Place search", "OpenStreetMap Nominatim", "search API; results outside Texas are dropped", "—", "type coordinates instead"),
     ("Statewide map layers", "SSURGO WEG/I (UC Davis SoilWeb), NRCS C, NASA POWER wind; built offline",
      "built into the app (data/layers.js and PNG overlays)", "statewide grid", "display only"),
-    ("Base maps", "Esri, USGS, OpenStreetMap", "map tiles", "—", "switch base map"),
+    ("Base maps; county lines", "Esri, USGS, OpenStreetMap; U.S. Census TIGER (county lines)", "map tiles; TIGERweb map "
+     "service drawn per tile", "—", "switch base map"),
 ]
 
 WIND_CALC = [

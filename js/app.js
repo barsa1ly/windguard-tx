@@ -61,6 +61,18 @@
   map.getPane("labels").style.pointerEvents = "none";
   map.getPane("refs").style.pointerEvents = "none";
 
+  /* County lines drawn by the Census TIGERweb map service for each tile. Its county layers 1–13 each cover a range of
+     map scales, so asking for all of them gives the right detail at every zoom. */
+  const TIGER_COUNTIES = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/export";
+  const CensusCounties = L.TileLayer.extend({
+    getTileUrl(c) {
+      const a = L.CRS.EPSG3857.project(this._map.unproject([c.x * 256, c.y * 256], c.z));
+      const b = L.CRS.EPSG3857.project(this._map.unproject([(c.x + 1) * 256, (c.y + 1) * 256], c.z));
+      return `${this._url}?bbox=${a.x},${b.y},${b.x},${a.y}&bboxSR=3857&imageSR=3857&size=256,256`
+        + "&layers=show:1,3,5,7,9,11,13&format=png32&transparent=true&f=image";
+    },
+  });
+
   const refs = {
     labels: { name: "Place, river and county names", sub: "towns, rivers, lakes, landmarks",
       layer: L.tileLayer(esri("Reference/World_Reference_Overlay"), { pane: "labels", maxZoom: 19, attribution: "Labels © Esri" }), on: true },
@@ -68,11 +80,9 @@
       layer: L.tileLayer(esri("Reference/World_Transportation"), { pane: "refs", maxZoom: 19, opacity: 0.95 }), on: true },
     hydro: { name: "Rivers, streams, lakes", sub: "USGS National Hydrography lines",
       layer: L.tileLayer(usgs("USGSHydroCached"), { pane: "refs", maxZoom: 19, maxNativeZoom: 16, opacity: 0.9 }), on: true },
-    counties: { name: "County lines", sub: "with NRCS climatic factor C",
-      layer: L.geoJSON(LAYERS.counties, {
-        pane: "refs", interactive: false,
-        style: { color: "#ffffff", weight: 1, opacity: 0.55, fill: false, dashArray: "3 3" },
-      }), on: false },
+    counties: { name: "County lines", sub: "U.S. Census TIGER, exact at every zoom",
+      layer: new CensusCounties(TIGER_COUNTIES, { pane: "refs", maxZoom: 19, opacity: 0.85, className: "county-lines", attribution: "Counties: U.S. Census TIGER" }),
+      on: true },
   };
 
   const imgOpts = { pane: "thematic", opacity: 0.6, className: "thematic-img", interactive: false };
@@ -106,7 +116,7 @@
     ssurgo: { name: "Soil map units (SSURGO)", sub: "polygon lines and map symbols, zoom 13+",
       layer: L.tileLayer.wms("https://SDMDataAccess.sc.egov.usda.gov/Spatial/SDM.wms", {
         layers: "mapunitpoly", format: "image/png", transparent: true, pane: "refs", minZoom: 13, maxZoom: 19, opacity: 0.85,
-        attribution: "USDA-NRCS SSURGO" }), on: true },
+        attribution: "USDA-NRCS SSURGO" }), on: false },
   };
 
   let baseKey = "sat";

@@ -704,3 +704,6 @@ table.grid td.l { text-align: left; }
   .abar { grid-template-columns: 12px minmax(0, 1.3fr) minmax(0, 1fr) 44px 52px; font-size: 11.5px; }
   .draw-bar { top: auto; bottom: 16px; }
 }
+
+/* Census county lines arrive grey; lighten them and add a thin dark halo so they show on imagery and street maps */
+.county-lines { filter: brightness(1.7) drop-shadow(0 0 1.2px rgba(0, 0, 0, .75)); }

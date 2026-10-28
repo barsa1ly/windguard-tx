@@ -20,7 +20,7 @@ To put it on a phone, host the folder on any static host (GitHub Pages, Netlify,
 
 | Tab | Content |
 |---|---|
-| Map | Satellite imagery (Esri), with switchable USGS imagery+topo, OpenStreetMap streets and USGS topo bases. Overlays: place, river and county names; roads and street names; NHD rivers and streams; county lines; statewide susceptibility, soil Wind Erodibility Group and climatic factor C; NLCD 2021 land cover; SSURGO map-unit lines at zoom 13+. |
+| Map | Satellite imagery (Esri), with switchable USGS imagery+topo, OpenStreetMap streets and USGS topo bases. Overlays: place, river and county names; roads and street names; NHD rivers and streams; county lines (U.S. Census TIGER, on by default, exact at every zoom); statewide susceptibility, soil Wind Erodibility Group and climatic factor C; NLCD 2021 land cover; SSURGO map-unit lines at zoom 13+ (off by default). |
 | Overview | Bare-soil risk (WEQ E = I × C/100), erodibility index C·I/T, mean wind, erosive-wind hours, prevailing erosive direction, WEG, NRCS C, land cover, and a 12-month risk strip (red = high-risk months). |
 | Wind | Seasonal erosive-wind hours (red/amber/gray by risk), wind and gust climatology, gust days, erosive wind rose with the resultant soil-transport direction, precipitation vs ET₀, year-to-year trend with significance test, and indices (Fryberger drift potential, FAO climatic index, barrier orientation). You can switch the wind source (calibrated to the nearest airport, airport only, or gridded model only), the gridded model (NASA MERRA-2 directly by default, or ECMWF via Open-Meteo), the calibration station, the period (5/10/20 yr), units and erosive threshold. A comparison card shows the reanalysis against the airport station. |
 | Soil | Dominant SSURGO component and map unit, and an editable surface layer (sand, silt, clay, OM, CaCO₃, pH) that recalculates texture class, WEG and I, RWEQ erodible fraction and crust factor, and water properties (Saxton & Rawls 2006). The **+** expander opens the full profile: horizons with texture, bulk density, LL/DUL/SAT, AWC, Ksat, pH, CEC, CaCO₃, gypsum, EC, SAR, coarse fragments, root growth factor, estimated N; plus classification, slope (survey and USGS 3DEP), restrictive layer, drainage rate, runoff curve number, albedo, evaporation limit, T and Kw factors, capability class, components, crop yields and the reference plant community. Exports to CSV and to a crop-model `.SOL` file. |
@@ -48,6 +48,7 @@ Every default source is read directly from the agency that produces it. Open-Met
 | Boundary files | your shapefile, KML/KMZ or GeoJSON | read in the browser (shpjs, togeojson, JSZip); never uploaded | — |
 | Statewide WEI/WEG grids | SSURGO via UC Davis SoilWeb | pre-built in `data/` | — |
 | Geocoding, basemaps | OpenStreetMap Nominatim; Esri, USGS | direct | — |
+| County lines | U.S. Census TIGER | TIGERweb map service, drawn per tile, direct | — |
 
 The station list with NOAA GHCNh ids is in `data/stations.js` (`tools/fetch_stations.py`).
 
