@@ -45,6 +45,12 @@ The app reads each dataset from the agency that produces it wherever a browser c
 
 The station list with NOAA GHCNh ids is in `data/stations.js` (`tools/fetch_stations.py`).
 
+## How the data flows
+
+[`docs/WindGuard_TX_Data_Flow.docx`](docs/WindGuard_TX_Data_Flow.docx) has three diagrams and tables showing where each dataset comes from, where it is calculated, and how each result reaches the screen. Rebuild it with `python tools/build_flow_doc.py`.
+
+![Data flow: sources, calculations in the browser, results](docs/img/flow_overview.png)
+
 ## Rebuilding the statewide layers
 
 `tools/` contains the scripts that produced `data/` (Python 3.11 with numpy, rasterio, shapely, pyproj, scipy, Pillow, requests):
