@@ -316,7 +316,7 @@ WG.area = (function () {
           const w = c.pct / tot, I = c.wei ?? WG.soil.WEG_I[c.weg] ?? 0;
           weg[c.weg] = (weg[c.weg] || 0) + w;
           sumI += w * I; wI += w;
-          if (C) { const E = (I * C) / 100; risk[riskClass(E)] += w; sumE += w * E; wE += w; } else noC += w;
+          if (C) { const E = (I * C) / 100; risk[riskClass(Math.round(E))] += w; sumE += w * E; wE += w; } else noC += w; // classes of whole t/ac/yr, as shown
         });
       }
       const N = pts.length;
@@ -343,7 +343,7 @@ WG.area = (function () {
         const u = r.soil.units[p.mukey] || {};
         const color = u.water ? "#2563eb" : WEG_COLOR[u.weg] || "#9aa5b1";
         L.polygon(p.rings.map(rg => rg.map(([x, y]) => [y, x])), { pane: "thematic", color: "#ffffff", weight: 0.8, fillColor: color,
-          fillOpacity: 0.6, interactive: true }).bindTooltip(`${esc(u.musym || "")} · ${esc(u.muname || "")}${u.weg ? ` · WEG ${esc(u.weg)}` : ""}`, { sticky: true })
+          fillOpacity: 0.6, interactive: true }).bindTooltip(`${esc(u.musym || "")} · ${esc(u.muname || "")}${u.weg ? ` · WEG ${esc(u.weg)}${WG.soil.wegInfo(u.weg) ? `, I ${WG.soil.wegInfo(u.weg).I}` : ""}` : ""}`, { sticky: true })
           .addTo(layer);
       });
     }
@@ -370,12 +370,12 @@ WG.area = (function () {
     const left = ["building", "road", "water"].filter(k => r.count[k]).map(k => `${{ building: "buildings", road: "roads", water: "water" }[k]} ${fmt(c.acres * share(k), 1)} ac`);
     const ratedAc = validAc * (1 - r.notRated / Math.max(r.count.valid, 1)); // open land in components with a WEG
     const wegTot = Object.values(r.weg).reduce((a, b) => a + b, 0) || 1;
-    const wegRows = WEG_ORDER.filter(k => r.weg[k]).map(k => ({ label: esc(LAYERS.layers.weg.legend[WEG_ORDER.indexOf(k)].label), color: WEG_COLOR[k],
+    const wegRows = WEG_ORDER.filter(k => r.weg[k]).map(k => ({ label: `WEG ${k} <small>I ${WG.soil.wegInfo(k).I}</small>`, color: WEG_COLOR[k],
       share: r.weg[k] / wegTot, acres: ratedAc * (r.weg[k] / wegTot) }));
     const riskTot = r.risk.reduce((a, b) => a + b, 0);
     const riskRows = riskTot ? RISK.map((k, i) => ({ label: `${k.name} <small>${k.range}</small>`, color: k.color, share: r.risk[i] / riskTot,
       acres: ratedAc * (r.risk[i] / riskTot) })).filter(x => x.share > 0) : [];
-    const meanE = r.meanE;
+    const meanE = r.meanE, meanK = meanE !== null ? riskClass(Math.round(meanE)) : 0; // class of the number shown
     const cTxt = r.cRange ? (r.cRange[0] === r.cRange[1] ? `C = ${fmt(r.cRange[0], 0)}` : `C = ${fmt(r.cRange[0], 0)}–${fmt(r.cRange[1], 0)}`) : "no climatic factor in SSURGO";
     const st = r.status;
     const srcBits = [
@@ -387,9 +387,11 @@ WG.area = (function () {
     $("#areaResults").innerHTML = `
       <div class="area-sum"><b>${esc(c.name)}</b><span>${fmt(c.acres, 0)} ac · ${fmt(c.acres / 2.47105, 0)} ha</span></div>
       <p class="fine">Analysed: <b>${fmt(validAc, 0)} ac</b> of open land${left.length ? `; left out ${left.join(", ")}` : ""}${r.count.outside ? `; ${fmt(c.acres * share("outside"), 0)} ac outside Texas` : ""}${r.count.nodata ? `; ${fmt(c.acres * share("nodata"), 1)} ac without soil data` : ""}.</p>
-      ${meanE !== null ? `<div class="area-kpi"><div><small>Mean bare-soil potential</small><b>${fmt(meanE, 0)} t/ac/yr</b><span>${RISK[riskClass(meanE)].name}</span></div>
-        <div><small>Mean erodibility I</small><b>${fmt(r.meanI, 0)} t/ac/yr</b><span>${cTxt}</span></div></div>` : ""}
-      <h4>Wind Erodibility Group (share of rated soil)</h4>${wegRows.length ? bars(wegRows) : '<p class="fine">No rated soils in this area.</p>'}
+      ${meanE !== null ? `<div class="area-kpi"><div><small>Mean bare-soil potential</small><b>${fmt(meanE, 0)} t/ac/yr</b><span>${RISK[meanK].name} (${RISK[meanK].range})</span></div>
+        <div><small>Mean erodibility I (0–310)</small><b>${fmt(r.meanI, 0)} t/ac/yr</b><span>${cTxt}</span></div></div>` : ""}
+      <h4>Wind Erodibility Group (share of rated soil)</h4>
+      <p class="fine">WEG 1 is the most erodible and 8 is not erodible; I is each group's erodibility index in t/ac/yr (0–310). <button class="link" data-methods="m-scales">All nine groups →</button></p>
+      ${wegRows.length ? bars(wegRows) : '<p class="fine">No rated soils in this area.</p>'}
       ${r.notRated > 0.005 * r.count.valid ? `<p class="fine">${pct(r.notRated / r.count.valid)} of the open land is in components without a WEG (rock outcrop, urban land, pits); it is not in the shares.</p>` : ""}
       <h4>Bare-soil erosion potential, E = I × C / 100</h4>${riskRows.length ? bars(riskRows) : '<p class="fine">No climatic factor C for these map units.</p>'}
       <h4>Soil map units</h4>

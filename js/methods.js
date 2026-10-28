@@ -53,11 +53,11 @@ WG.methods = (function () {
     ["Erodibility index (highly erodible land, wind)", "EI = C · I / T&nbsp; (C as a fraction)",
       "T: tolerable soil loss from SSURGO (t/ac/yr). EI ≥ 8 meets the wind criterion for highly erodible land.", "Overview risk card", "7 CFR 12.21; NRCS NFSAM", USED],
     ["Wind Erodibility Group and I from the surface layer", "WEG = f(texture, CaCO₃, coarse fragments) → I",
-      "WEG 1 sands (I 160–310) · 2 loamy sands (134) · 3 sandy loams (86) · 4 clays (86) · 4L calcareous loams (86) · 5 noncalcareous loams (56) · 6 (48) · 7 silts (38) · 8 stony (0). Calcareous = CaCO₃ ≥ 5% (app proxy for strong effervescence). Coarse fragments 15–35% → one group less erodible, 35–60% → two, > 60% → I = 0.",
-      "Soil tab when you edit the surface layer (otherwise SSURGO's own WEG and I)", "NRCS National Soil Survey Handbook Part 618.95", USED],
+      "Texture guide: WEG 1 sands (I 160–310) · 2 loamy sands (134) · 3 sandy loams (86) · 4 clays (86) · 4L calcareous loams (86) · 5 noncalcareous loams (56) · 6 noncalcareous clayey loams (48) · 7 noncalcareous silts (38) · 8 rock-covered or wet (0); full definitions under Classes and scales. Not applied: iron-rich mineralogy, andic material, wetness, Folists. Calcareous = CaCO₃ ≥ 5% (app proxy for strong effervescence). Coarse fragments (% by volume: SSURGO's fragment volume, else its sieve weight % converted with the bulk density, at least the class of a modifier such as STV) 15–35% → one group less erodible (the next lower I, 86 → 56), 35–60% → two, > 60% → I = 0; sands and loamy sands move less.",
+      "Soil tab, when an edit to the surface layer changes what these rules give (otherwise SSURGO's own WEG and I are kept)", "NRCS National Soil Survey Handbook, Part 618, §618.93 (2024)", USED],
     ["Texture class", "USDA texture triangle (sand, silt, clay %)", "Sand-size modifier (e.g. fine sandy loam) kept from the survey when the family is unchanged.",
       "Soil tab", "Soil Survey Manual (USDA Handbook 18, 2017)", USED],
-    ["Risk classes", "E &lt; 10 Low · 10–40 Moderate · 40–80 High · 80–150 Very high · &gt; 150 Extreme",
+    ["Risk classes", "E &lt; 10 Low · 10–40 Moderate · 40–80 High · 80–150 Very high · ≥ 150 Extreme",
       "t/ac/yr; roughly 2, 8, 16 and 30 times T = 5.", "Overview risk card; area analysis", "App convention, not NRCS classes", USED],
     ["Area share of a WEG or risk class", "share<sub>k</sub> = Σ<sub>points</sub> Σ<sub>components</sub> (pct / 100) · [class = k] &nbsp;/&nbsp; Σ<sub>points</sub> Σ<sub>components</sub> (pct / 100)",
       "About 20,000 stratified random points inside the boundary (seeded, so the same area gives the same answer). Points on a building, a road (within its class half-width) or water, outside Texas, or without soil data are left out; each map unit is split by its component percentages; components without a WEG are reported separately. Acres = share × analysed acres; mean I and E are weighted the same way, with E = I × C / 100 and C from each map unit's climatic-factor area.",
@@ -131,6 +131,29 @@ WG.methods = (function () {
     ["Slope and aspect from the DEM", "slope = 100 √(g<sub>x</sub>² + g<sub>y</sub>²),&nbsp; g<sub>x</sub> = (z<sub>E</sub> − z<sub>W</sub>) / 2Δx,&nbsp; aspect = atan2(−g<sub>x</sub>, −g<sub>y</sub>)", "Elevations 100 m N, S, E and W of the point.", "Header, soil profile", "Finite differences", USED],
   ];
 
+  /* [number on screen, its scale, what it means]: so no value reads as a score out of 100. */
+  function scaleRows() {
+    const st = (window.WE_LAYERS && WE_LAYERS.stats) || {};
+    const tx = st.E_pct_by_class, c = st.C_range;
+    const pct = v => Math.round(v);
+    return [
+      ["<b>Bare-soil potential E</b> (risk card, area tool)", "0 and up, t/ac/yr: &lt; 10 Low · 10–40 Moderate · 40–80 High · 80–150 Very high · ≥ 150 Extreme",
+        `Tons of soil per acre per year a wide, bare, smooth, unsheltered field could lose: E = I × C / 100. An amount, not a score. The classes are this app's, not NRCS's${tx ? `; across Texas, ${pct(tx[0])}% of the rated land is Low, ${pct(tx[1])}% Moderate, ${pct(tx[2])}% High, ${pct(tx[3])}% Very high and ${pct(tx[4])}% Extreme` : ""}.`],
+      ["<b>Wind Erodibility Group</b> (WEG)", "1, 2, 3, 4, 4L, 5, 6, 7, 8",
+        "NRCS groups surface soils by how easily they blow: 1 is the most erodible, 8 is not erodible. Groups 3, 4 and 4L share I = 86; 4L holds calcareous (limy) loamy soils. Texture guide in the table below."],
+      ["<b>Wind erodibility index I</b>", "0–310 t/ac/yr",
+        "Set by the WEG: the yearly loss from a wide, bare, smooth field in the climate of Garden City, Kansas (C = 100)."],
+      ["<b>Climatic factor C</b>", `percent of Garden City, KS (= 100)${c ? `; Texas ${Math.round(c[0])}–${Math.round(c[1])}` : ""}`,
+        "How strongly wind speed and dryness drive erosion: C = 34.483 v³ / PE². Higher is windier or drier."],
+      ["<b>Tolerable soil loss T</b>", "1–5 t/ac/yr", "The most a soil can lose each year without losing productivity (SSURGO); deep soils are 5."],
+      ["<b>Erodibility index EI</b> = C·I/T", "0 and up; 8 or more = highly erodible land", "The USDA wind criterion for highly erodible land (7 CFR 12.21), with C as a fraction."],
+      ["<b>Erosive wind hours</b>", "0–8,760 h/yr", "Hours a year with 10 m wind at or above the erosive threshold (18 mph by default, adjustable on the Wind tab)."],
+      ["<b>Month strip</b> (Overview)", "share of the year's risk: red ≥ 10%, amber ≥ 6.7%", "Erosive wind energy × dryness in each month, as a share of the year's total."],
+      ["<b>Sand drift potential DP</b> (Wind tab)", "vector units: &lt; 200 low · 200–399 intermediate · ≥ 400 high", "Fryberger &amp; Dean 1979; RDP/DP below 0.3 multidirectional, 0.3–0.8 intermediate, above 0.8 one direction."],
+    ];
+  }
+  const wegRows = () => WG.soil.WEG_INFO.map(w => [`<b>${w.g}</b>`, `<b>${esc(w.name)}</b>: ${esc(w.def)}`, w.I]);
+
   function table(cols, rows, cls) {
     return `<div class="mtable-wrap"><table class="mtable ${cls || ""}"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
       <tbody>${rows.map(r => `<tr>${r.map((v, i) => `<td data-label="${esc(cols[i])}">${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
@@ -149,6 +172,9 @@ WG.methods = (function () {
     $("#methodsBody").innerHTML = `
       <p class="fine">“Direct” means the app downloads from the agency that produces the data. Every default source is direct. Open-Meteo is only a backup: for hourly wind when NASA POWER errors or has not answered within 20 s, for daily weather when gridMET and NASA POWER both fail, and for elevation when USGS fails. You can still pick <b>ECMWF (Open-Meteo copy)</b> under Model on the Wind tab; Copernicus's own data store needs each user's personal key and a queued job that takes minutes. At Lubbock, ECMWF tracks the airport hour by hour slightly better (r = 0.80 against 0.71 for MERRA-2), and after calibration both give 1,291–1,295 erosive h/yr, Feb–Apr, from the WSW.</p>
       <section id="m-site"><h4>This location</h4>${siteHTML()}</section>
+      <section id="m-scales"><h4>Classes and scales</h4>${table(["Number on screen", "Scale", "What it means"], scaleRows(), "scales")}
+        <h4>Wind Erodibility Groups</h4>${table(["WEG", "Texture guide", "I, t/ac/yr"], wegRows(), "weg")}
+        <p class="fine">For a named soil, NRCS uses the group recorded in the soil survey; the texture guide is for soils that are not identified (${A("https://efotg.sc.egov.usda.gov/references/public/TX/Wind_Erosion.pdf", "National Agronomy Manual, Part 502")}). So a soil's group can differ from what its texture suggests: Pullman clay loam, for example, is WEG 7. The app shows the survey's group, and uses the guide only when you edit the surface layer. Texture guide: USDA-NRCS ${A("https://directives.nrcs.usda.gov/sites/default/files2/1725389517/Part%20618%20Subpart%20B%20%E2%80%93%20Exhibits.pdf", "National Soil Survey Handbook, Part 618 Subpart B")}, §618.93 (amended August 2024). Calcareous: strong or violent fizzing of the fine earth in cold dilute (1N) HCl. Rock fragments move a soil to a less erodible group, meaning the next lower I (86 → 56): one group at 15–35% by volume, two at 35–60%, I = 0 above 60% (sands and loamy sands move less).</p></section>
       <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}</section>
       <section id="m-erod"><h4>Erodibility equations</h4>${table(EQ_COLS, eqRows(EROD), "eqs")}</section>
       <section id="m-wind"><h4>Wind and climate equations</h4>${table(EQ_COLS, eqRows(WIND), "eqs")}</section>

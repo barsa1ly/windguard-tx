@@ -629,11 +629,12 @@ WG.practices = (function () {
     }
 
     // soil- and site-specific notes
-    if (weg === "1" || weg === "2") notes.unshift(`This surface is WEG ${weg} (${weg === "1" ? "sand" : "loamy sand"}): erodibility I = ${fmt(ctx.I, 0)} t/ac/yr, among the most erodible soils. Roughness alone does not last; rely on ≥ 60% cover.`);
-    else if (weg === "3") notes.unshift("This surface is WEG 3 (sandy loam, I = 86 t/ac/yr): highly erodible when bare and dry. Cover crops or standing sorghum/wheat stubble, with chisel or lister roughening as a backstop.");
-    else if (weg === "4L") notes.unshift("Calcareous surface (WEG 4L, I = 86): carbonates weaken clods and crusts abrade quickly, so these soils blow more than their texture suggests. Avoid pulverizing tillage; keep residue plus roughness.");
-    else if (weg === "4") notes.unshift("Clay surface (WEG 4, I = 86): clods resist wind when moist, but drying and freeze–thaw in late winter break them into erodible aggregates — keep residue through spring.");
-    else if (["5", "6", "7"].includes(weg)) notes.unshift(`WEG ${weg} (I = ${fmt(ctx.I, 0)}): moderately erodible; residue management and chisel roughening are usually enough, trap strips optional.`);
+    // name the group by number and I: the survey's group does not always match a texture name
+    if (weg === "1" || weg === "2") notes.unshift(`This surface is WEG ${weg} (I = ${fmt(ctx.I, 0)} t/ac/yr), among the most erodible soils. Roughness alone does not last; rely on ≥ 60% cover.`);
+    else if (weg === "3") notes.unshift(`This surface is WEG 3 (I = ${fmt(ctx.I, 0)} t/ac/yr): highly erodible when bare and dry. Cover crops or standing sorghum/wheat stubble, with chisel or lister roughening as a backstop.`);
+    else if (weg === "4L") notes.unshift(`Calcareous surface (WEG 4L, I = ${fmt(ctx.I, 0)} t/ac/yr): carbonates weaken clods and crusts abrade quickly, so these soils blow more than their texture suggests. Avoid pulverizing tillage; keep residue plus roughness.`);
+    else if (weg === "4") notes.unshift(`Clayey surface (WEG 4, I = ${fmt(ctx.I, 0)} t/ac/yr): clods resist wind when moist, but drying and freeze–thaw in late winter break them into erodible aggregates — keep residue through spring.`);
+    else if (["5", "6", "7"].includes(weg)) notes.unshift(`WEG ${weg} (I = ${fmt(ctx.I, 0)} t/ac/yr): moderately erodible; residue management and chisel roughening are usually enough, trap strips optional.`);
     if (ctx.om !== null && ctx.om < 1) notes.push(`Surface organic matter is low (${fmt(ctx.om, 1)}%). Residue, cover crops and less tillage build aggregate stability over time.`);
     if (ctx.EI !== null && ctx.EI >= 8 && (lu === "cropland" || lu === "crp")) notes.push(`Erodibility index C·I/T = ${fmt(ctx.EI, 1)} (≥ 8): likely highly erodible land under USDA conservation compliance (7 CFR 12.21) — a conservation plan is needed for farm-program eligibility.`);
 
@@ -684,7 +685,7 @@ WG.practices = (function () {
     const chips = [
       ctx.level ? `<span class="chip">Bare-soil risk: ${LEVEL[ctx.level]} (${fmt(ctx.E, 0)} t/ac/yr)</span>` : "",
       `<span class="chip">Windy season: ${esc(ctx.riskText)}</span>`,
-      ctx.weg ? `<span class="chip">WEG ${esc(ctx.weg)} · cover target ≥ ${coverTarget(ctx.weg)}%</span>` : "",
+      ctx.weg ? `<span class="chip" title="Wind Erodibility Group, 1 (most erodible) to 8 (not erodible)">WEG ${esc(ctx.weg)} · cover target ≥ ${coverTarget(ctx.weg)}%</span>` : "",
       `<span class="chip">${esc(ctx.regionName)}${ctx.mlra ? " · MLRA " + esc(ctx.mlra) : ""}</span>`,
       ctx.eco ? `<span class="chip">${esc(ctx.eco)}</span>` : "",
       `<span class="chip">Barriers: ${esc(ctx.orient)}</span>`,

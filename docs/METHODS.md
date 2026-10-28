@@ -29,7 +29,7 @@ The app computes Wind Erosion Equation (WEQ) step E3 for a bare, smooth (K = 1),
 
 **E = I × C / 100** (t/ac/yr)
 
-- **I**, soil erodibility index, comes from SSURGO `component.weg` / `component.wei` (NSSH Part 618.95). When you edit the surface layer, the app reassigns the WEG with the NSSH texture rules (§2).
+- **I**, soil erodibility index, comes from SSURGO `component.weg` / `component.wei` (NSSH Part 618, §618.93). When an edit to the surface layer changes what the NSSH texture rules give, the app uses the rules' group (§2); otherwise it keeps the survey's.
 - **C**, climatic factor, is the official NRCS value from the SSURGO "Climate Factor" land-area overlap for the map unit. For example: Dawson 70, Lubbock 70, Potter 90, Gaines 80, Ward 130, El Paso 130, Harris 10.
   - The definition is C = 34.483 v³ / PE² (Chepil et al. 1962). v is the mean annual wind in mph at 30 ft. PE is the Thornthwaite P–E index, Σ 115 [P/(T−10)]^(10/9), with P in inches (minimum 0.5) and T in °F (minimum 28.4). Garden City, KS = 100.
 - **Erodibility index** = C·I/T. T is the SSURGO tolerable soil loss. A value ≥ 8 meets the USDA highly-erodible-land wind criterion (7 CFR 12.21), with C applied as a fraction.
@@ -38,15 +38,42 @@ The app computes Wind Erosion Equation (WEQ) step E3 for a bare, smooth (K = 1),
 
 | Low | Moderate | High | Very high | Extreme |
 |---|---|---|---|---|
-| < 10 | 10–40 | 40–80 | 80–150 | > 150 |
+| < 10 | 10–40 | 40–80 | 80–150 | ≥ 150 |
 
-The class edges correspond to roughly 2, 8, 16 and 30 times T = 5. They are app conventions, not NRCS classes.
+The class edges correspond to roughly 2, 8, 16 and 30 times T = 5. They are app conventions, not NRCS classes. The risk card shows all five classes under the headline with the site's class lit, and says that E is an amount (t/ac/yr), not a score.
+
+**Scales of the other numbers on screen** (each is shown next to its value):
+
+| Number | Scale | Meaning |
+|---|---|---|
+| Wind Erodibility Group (WEG) | 1, 2, 3, 4, 4L, 5, 6, 7, 8 | 1 is the most erodible, 8 is not erodible; 3, 4 and 4L share I = 86, and 4L holds calcareous (limy) loamy soils (§2) |
+| Wind erodibility index I | 0–310 t/ac/yr | set by the WEG: the yearly loss from a wide, bare, smooth field in the climate of Garden City, KS |
+| Climatic factor C | % of Garden City, KS (= 100); Texas counties 4–150 | higher is windier or drier |
+| Tolerable soil loss T | 1–5 t/ac/yr | the most a soil can lose each year without losing productivity |
+| Erodibility index EI | 0 and up; ≥ 8 is highly erodible land | C·I/T |
+| Erosive wind hours | 0–8,760 h/yr | hours with 10 m wind at or above the threshold |
 
 **Statewide map** (`tools/build_layers.py`): SoilWeb's 800 m WEI grid, which is derived from SSURGO, multiplied by the county NRCS C. The result is reprojected to Web Mercator at 1 km resolution and clipped to Texas.
 
-## 2. Wind Erodibility Group from user-edited soil values
+## 2. Wind Erodibility Groups
 
-The texture class comes from the USDA triangle. The survey's sand-size modifier (e.g. FSL) is kept when the family is unchanged.
+**NRCS's texture guide to the groups** (National Soil Survey Handbook, Part 618 Subpart B, §618.93, amended August 2024). The Soil tab shows this table with the site's group marked; the Methods sheet shows it in full.
+
+| WEG | Surface layer | I (t/ac/yr) |
+|---|---|---|
+| 1 | Very fine sand, fine sand, sand, coarse sand | 160 (coarse sand) to 310 (very fine sand); 220 on average |
+| 2 | Loamy very fine sand, loamy fine sand, loamy sand, loamy coarse sand; very fine sandy loam and silt loam with ≤ 5% clay; sapric material (except Folists) | 134 |
+| 3 | Very fine sandy loam (not WEG 2), fine sandy loam, sandy loam, coarse sandy loam; noncalcareous silt loam with 20 to < 50% very fine sand and 5 to < 12% clay | 86 |
+| 4 | Clay, silty clay; noncalcareous clay loam and silty clay loam with > 35% clay; none with sesquic, parasesquic, ferritic, ferruginous or kaolinitic (iron-rich) mineralogy | 86 |
+| 4L | Calcareous loam, silt loam, silt, sandy clay, sandy clay loam, clay loam, silty clay loam | 86 |
+| 5 | Noncalcareous loam with < 20% clay; noncalcareous silt loam with 5 to < 20% clay (not WEG 3); noncalcareous sandy clay loam and sandy clay; hemic material | 56 |
+| 6 | Noncalcareous loam and silt loam with ≥ 20% clay; noncalcareous clay loam and silty clay loam with ≤ 35% clay; iron-rich silt loam | 48 |
+| 7 | Noncalcareous silt; iron-rich noncalcareous silty clay, silty clay loam and clay in Oxisols or Ultisols; fibric material | 38 |
+| 8 | Not susceptible to wind erosion because of rock or pararock fragments at the surface and/or wetness; Folists | 0 |
+
+For a named soil, NRCS uses the group recorded in the soil survey; the texture guide is for soils that are not identified (National Agronomy Manual, Part 502: "For most NRCS uses, the I value is assigned for named soils based on wind erodibility groups"). A soil's recorded group can differ from what its texture alone suggests. Pullman clay loam is WEG 7 in 40 of 45 Texas survey records, and Randall clay in playas is WEG 7 too, though by texture they would be 6 and 4. For a soil you have not edited, the app shows the survey's group. It labels a soil's group only by its number and I, never by a texture name; texture names appear only in the class table, as the guide.
+
+**How the app assigns the group from edited values.** The app keeps the survey's group unless your values change what the texture rules below give, so a pH edit leaves Pullman clay loam in WEG 7. The texture class comes from the USDA triangle. The survey's sand-size modifier (e.g. FSL) is kept when the family is unchanged.
 
 | WEG | Surface texture rule | I |
 |---|---|---|
@@ -58,7 +85,7 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
 | 5 | Noncalcareous L < 20% clay; SIL 5–20% clay; SCL; SC | 56 |
 | 6 | Noncalcareous L/SIL ≥ 20% clay; CL/SICL ≤ 35% clay | 48 |
 | 7 | Noncalcareous SI | 38 |
-| 8 | Very stony or bouldery surface | 0 |
+| 8 | Through the fragment rule: > 60% rock fragments by volume (not sands or loamy sands), or WEG 6 with ≥ 35% or WEG 7 with ≥ 15% (the next lower I after 48 and 38 is 0) | 0 |
 
 - **RWEQ cross-checks** (Soil tab; Fryrear et al. 1994, 1998):
   - Erodible fraction: EF = (29.09 + 0.31 Sa + 0.17 Si + 0.33 Sa/Cl − 2.59 OM − 0.95 CaCO₃)/100, the fraction of dry aggregates < 0.84 mm.
@@ -66,7 +93,10 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
   - All inputs are in %. Values are flagged when the soil is outside the fitted range: Sa 5.5–93.6, Si 0.5–69.5, Cl 5–39.3, Sa/Cl 1.2–53, OM 0.18–4.79, CaCO₃ 0–25.2.
   - The RWEQ weather factor and transport-capacity equations are listed in the Methods sheet for reference but not computed. They need field length, roughness and cover.
 - "Calcareous" in the NSSH means strong or violent effervescence. The app uses CaCO₃ ≥ 5% as a proxy, because the NSSH gives no CaCO₃ threshold.
-- Coarse fragments move the group toward less erodible: one group at 15–35%, two groups at 35–60%, and I = 0 above 60%. Sands and loamy sands move fewer groups.
+- Coarse fragments move the group toward less erodible: one group at 15–35% by volume, two groups at 35–60%, and I = 0 above 60%. Sands and loamy sands move fewer groups (none at 15–35%, one at 35–60%, three above 60%). One group means the next lower I (160 → 134, 86 → 56), so 3, 4 and 4L all move to 5.
+  - The volume is SSURGO's `fragvoltot_r` when the survey gives it. Otherwise the app takes the whole-soil weight (`frag3to10_r` + `fraggt10_r` for cobbles and stones, plus 100 − % passing the No. 10 sieve for the rest of the soil) and converts it with the layer's bulk density and 2.65 g/cm³ for rock: 17% by weight is about 10% by volume.
+  - A texture modifier sets a floor at the middle of its class: gravelly, cobbly, stony, bouldery, channery, flaggy or cherty 15–35%, "very" (e.g. STV) 35–60%, "extremely" (e.g. CBX) 60–90%.
+- Not applied, because the survey's own group already covers them for an unedited soil: iron-rich mineralogy, andic material, wetness and Folists.
 
 ## 3. Wind climatology at the point (Wind tab)
 

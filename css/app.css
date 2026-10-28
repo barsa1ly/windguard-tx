@@ -381,6 +381,17 @@ body:not(.leaflet-dragging) .leaflet-container.off-tx { cursor: not-allowed; } /
 .risk-card.loading .risk-level { opacity: .8; }
 .risk-gauge { flex: none; width: 76px; height: 76px; }
 .risk-gauge svg { width: 100%; height: 100%; }
+/* the class scale sits on a light panel so its small text stays readable on every card colour */
+.risk-legend { margin-top: 12px; padding: 5px; border-radius: 10px; background: rgba(255, 255, 255, .94); color: var(--ink); }
+.risk-scale { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; }
+.risk-scale div { min-width: 0; padding: 6px 2px 4px; border-radius: 6px; background: var(--surface-2); box-shadow: inset 0 3px 0 var(--c); text-align: center; line-height: 1.2; }
+.risk-scale b { display: block; font-size: 10.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.risk-scale span { display: block; font-size: 10px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.risk-scale div.on { background: var(--ink); color: #fff; }
+.risk-scale div.on span { color: #fff; }
+.risk-unit { margin: 5px 3px 1px; font-size: 11.5px; line-height: 1.4; color: var(--ink-2); }
+.risk-unit:empty { display: none; }
+.risk-links { display: flex; flex-wrap: wrap; gap: 0 16px; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @container (min-width: 560px) { .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -388,6 +399,12 @@ body:not(.leaflet-dragging) .leaflet-container.off-tx { cursor: not-allowed; } /
 .stat .k { display: block; font-size: 11.5px; color: var(--muted); }
 .stat .v { display: block; font-size: 16px; font-weight: 650; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .stat .v small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.stat .s { display: block; margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--muted); }
+.stat .s:empty { display: none; }
+.weg-strip { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 2px; margin: 3px 0 1px; }
+.weg-strip i { font-style: normal; font-size: 9.5px; font-weight: 600; line-height: 15px; text-align: center; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); }
+.weg-strip i.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.weg-ends { display: flex; justify-content: space-between; gap: 4px; font-size: 10px; margin-bottom: 2px; }
 
 .month-strip { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; }
 .month-strip .m { text-align: center; font-size: 11px; font-weight: 600; }
@@ -461,6 +478,13 @@ table.grid th:first-child { background: var(--surface-2); }
 table.grid tr:last-child td { border-bottom: 0; }
 table.grid th small { display: block; font-weight: 400; color: var(--muted); font-size: 10.5px; }
 table.grid td.l { text-align: left; }
+table.grid th.l { text-align: left; }
+table.weg-table td.l { white-space: normal; min-width: 190px; line-height: 1.35; }
+table.weg-table .def { display: none; margin-top: 2px; color: var(--ink-2); }
+table.weg-table tr.on .def, table.weg-table.full .def { display: block; }
+table.weg-table th:first-child, table.weg-table td:first-child { text-align: center; }
+table.weg-table tr.on td { background: var(--accent-soft); }
+table.weg-table .here { display: inline-block; margin-left: 4px; padding: 0 7px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 600; line-height: 17px; }
 .param-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 @container (min-width: 560px) { .param-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .param-grid div { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 12.5px; min-width: 0; }
@@ -626,8 +650,11 @@ table.grid td.l { text-align: left; }
   .panel-body { overflow: visible; padding: 0; }
   .card, .stat, .risk-card, .plan-head { box-shadow: none; border: 1px solid #ddd; break-inside: avoid; }
   .plan-head, .risk-card { background: #fff !important; color: #000; }
-  .plan-head h3, .plan-head p, .plan-head .chip, .risk-card .eyebrow, .risk-text { color: #000 !important; }
+  .plan-head h3, .plan-head p, .plan-head .chip, .risk-card .eyebrow, .risk-text, .risk-unit { color: #000 !important; }
   .plan-head .chip { border-color: #bbb; }
+  .risk-legend { padding: 0; }
+  .risk-scale div.on { background: #fff; color: #000; outline: 2px solid #000; }
+  .risk-scale div.on span { color: #000; }
   .print-only { display: block; }
   a { color: #000; }
 }
@@ -674,7 +701,7 @@ table.grid td.l { text-align: left; }
 }
 
 /* field or area analysis: a non-modal panel so the map stays usable */
-.sheet.area { left: 12px; right: auto; top: 68px; width: min(420px, calc(100% - 24px)); max-height: calc(100% - 80px); }
+.sheet.area { left: 12px; right: auto; top: 68px; width: min(420px, calc(100% - 24px)); max-height: calc(100% - 80px); z-index: 1500; } /* under modal sheets and their backdrop */
 .area-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 6px; }
 .btn.ghost { background: transparent; }
 .area-status { padding: 10px 0; }

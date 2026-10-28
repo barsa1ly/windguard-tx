@@ -466,7 +466,13 @@
     $("#riskLevel").textContent = "Analyzing…";
     $("#riskText").textContent = `Fetching the soil survey and ${state.period} years of hourly wind for this point…`;
     Ch.gauge($("#riskGauge"), null);
-    ["stWind", "stHours", "stDir", "stWeg", "stC", "stLc"].forEach(id => { $("#" + id).innerHTML = '<span class="skeleton" style="width:70%"></span>'; });
+    renderRiskScale(0);
+    $("#riskUnit").textContent = "";
+    ["stWind", "stHours", "stDir", "stWeg", "stC", "stLc"].forEach(id => {
+      $("#" + id).innerHTML = '<span class="skeleton" style="width:70%"></span>';
+      $("#" + id + "S").textContent = "";
+    });
+    renderWegTable(null);
     $("#monthStrip").innerHTML = U.MONTHS.map(m => `<div class="m"><i class="skeleton" style="height:28px"></i>${m[0]}</div>`).join("");
     $("#ovSoil").innerHTML = '<span class="skeleton"></span><span class="skeleton" style="width:60%"></span>';
     $("#soilSummary").innerHTML = '<span class="skeleton"></span><span class="skeleton" style="width:60%"></span>';
@@ -660,11 +666,16 @@
     if (!s) return null;
     if (!state.edits) return { ...s, calc: null };
     const e = { ...s, ...state.edits };
-    const code = S.refineCode(S.textureClass(e.sand, e.silt, e.clay), s.texCode);
-    e.texCode = code;
-    e.texName = S.TEX[code] || code;
+    const texOf = v => S.refineCode(S.textureClass(v.sand, v.silt, v.clay), s.texCode);
+    // unchanged sand/silt/clay keep the survey's own texture label (its RV fractions can classify differently)
+    const sameTex = e.sand === s.sand && e.silt === s.silt && e.clay === s.clay;
+    if (!sameTex) { e.texCode = texOf(e); e.texName = S.TEX[e.texCode] || e.texCode; }
     const w = S.wegFromSurface(e);
-    e.weg = w.weg; e.wei = w.I; e.calc = w;
+    // keep the survey's group unless the edit changes what the texture rules give (both worked out the same way):
+    // a pH edit must not move Pullman clay loam (survey WEG 7) to the rules' 6, or a very stony Ector loam from 8 to 6
+    const base = S.wegFromSurface(sameTex ? s : { ...s, texCode: texOf(s) });
+    if (s.weg && w.weg === base.weg) { e.calc = null; e.kept = true; }
+    else { e.weg = w.weg; e.wei = w.I; e.calc = w; }
     return e;
   }
   WG.currentSurface = currentSurface;
@@ -672,8 +683,8 @@
   function cFactor() {
     if (state.soil && state.soil.cFactor) return { C: state.soil.cFactor, src: "NRCS (SSURGO climate-factor area)" };
     if (state.wind && !state.wind.error) {
-      // local estimate from reanalysis: scale FAO monthly-sum C to Chepil-type C (rough)
-      return { C: Math.round(Math.min(200, state.wind.faoC * 0.9)), src: "estimated from reanalysis wind" };
+      // local estimate from reanalysis: scale FAO monthly-sum C to Chepil-type C (rough), kept within the published Texas range
+      return { C: Math.round(Math.min(150, state.wind.faoC * 0.9)), src: "estimated from reanalysis wind" };
     }
     return null;
   }
@@ -685,7 +696,8 @@
     const E = (surf.wei * cf.C) / 100;
     const T = state.soil.dominant ? num(state.soil.dominant.tfact) : null;
     const EI = T ? E / T : null;
-    const level = E < 10 ? 1 : E < 40 ? 2 : E < 80 ? 3 : E < 150 ? 4 : 5;
+    const Er = Math.round(E); // classify what the headline shows, so the number and the lit class agree at the edges
+    const level = Er < 10 ? 1 : Er < 40 ? 2 : Er < 80 ? 3 : Er < 150 ? 4 : 5;
     const frac = level + Math.min(0.49, Math.max(-0.49,
       level === 1 ? E / 10 - 0.5 : level === 2 ? (E - 10) / 30 - 0.5 : level === 3 ? (E - 40) / 40 - 0.5 : level === 4 ? (E - 80) / 70 - 0.5 : (E - 150) / 150 - 0.5));
     return { E, EI, T, level, frac, C: cf.C, cSrc: cf.src, I: surf.wei, weg: surf.weg };
@@ -693,25 +705,58 @@
   WG.riskModel = riskModel;
 
   const LEVEL_NAME = ["", "Low", "Moderate", "High", "Very high", "Extreme"];
+  const LEVEL_RANGE = ["", "< 10", "10–40", "40–80", "80–150", "≥ 150"];
+  const LEVEL_COLOR = ["", "#3f9a66", "#9bbf55", "#efc24a", "#ef8a3c", "#d8402f"]; // the gauge's colours
+  const C_RANGE = LAYERS.stats && LAYERS.stats.C_range ? LAYERS.stats.C_range.map(v => fmt(v, 0)).join("–") : null;
+
+  /* The five classes under the headline, with this site's class lit, so the number has a scale. */
+  function renderRiskScale(level) {
+    const tx = (LAYERS.stats && LAYERS.stats.E_pct_by_class) || [];
+    $("#riskScale").innerHTML = LEVEL_NAME.slice(1).map((n, i) =>
+      `<div role="listitem" class="${i + 1 === level ? "on" : ""}"${i + 1 === level ? ' aria-current="true"' : ""} style="--c:${LEVEL_COLOR[i + 1]}" title="${n}: ${LEVEL_RANGE[i + 1]} t/ac/yr${tx[i] !== undefined ? ` · ${fmt(tx[i], 0)}% of rated Texas land` : ""}"><b>${n}</b><span>${LEVEL_RANGE[i + 1]}</span></div>`).join("");
+  }
+
   function renderRisk() {
     const rc = $("#riskCard");
     const r = riskModel();
     const w = state.wind;
     if (!r) {
-      if (state.soil && (state.soil.error || !state.soil.surface)) {
+      const surf = currentSurface();
+      const noGroup = !!surf && (surf.wei === null || surf.wei === undefined);
+      if (state.soil && (state.soil.error || !state.soil.surface || noGroup)) {
         rc.className = "risk-card";
-        $("#riskLevel").textContent = "Soil data unavailable";
+        Ch.gauge($("#riskGauge"), null);
+        renderRiskScale(0);
+        $("#riskUnit").textContent = "";
+        $("#riskLevel").textContent = noGroup ? "No erodibility group" : "Soil data unavailable";
         $("#riskText").textContent = state.soil.error ? `Soil survey request failed (${state.soil.error}). Try again or enter your soil test on the Soil tab.`
-          : "No soil survey component with texture data here (water, urban or rock?). Enter your soil test on the Soil tab.";
+          : !noGroup ? "No soil survey component with texture data here (water, urban or rock?). Enter your soil test on the Soil tab."
+          : state.edits ? "These surface values don't place the soil in a Wind Erodibility Group. Enter sand, silt and clay on the Soil tab, or reset to the survey."
+          : "The soil survey gives no Wind Erodibility Group for this soil (rock outcrop, urban land or water?). Enter your soil test on the Soil tab.";
+      } else if (surf) { // a group but no climatic factor C yet: clear any older message
+        rc.className = state.wind ? "risk-card" : "risk-card loading";
+        Ch.gauge($("#riskGauge"), null);
+        renderRiskScale(0);
+        $("#riskUnit").textContent = "";
+        $("#riskLevel").textContent = state.wind ? "Climatic factor unavailable" : "Analyzing…";
+        $("#riskText").textContent = state.wind ? "NRCS gives no climatic factor C for this map unit, and the wind history could not be used to estimate one."
+          : `Fetching ${state.period} years of hourly wind for this point…`;
       }
       return;
     }
     rc.className = `risk-card r${r.level}`;
     $("#riskLevel").textContent = `${LEVEL_NAME[r.level]} · ${fmt(r.E, 0)} t/ac/yr`;
     Ch.gauge($("#riskGauge"), r.frac);
+    renderRiskScale(r.level);
+    $("#riskUnit").textContent = `Tons of soil per acre per year that bare, smooth, unsheltered ground here could lose: an amount, not a score out of 100. `
+      + (r.T ? `For scale, NRCS rates this soil's tolerable loss (T) at ${fmt(r.T, 0)} t/ac/yr.` : "For scale, NRCS tolerable losses (T) are 1–5 t/ac/yr.");
     const peak = w && !w.error && w.riskMonths.length ? monthsText(w.riskMonths) : null;
-    const ei = r.EI ? ` Erodibility index C·I/T = ${fmt(r.EI, 1)}${r.EI >= 8 ? " (≥ 8: highly erodible land by NRCS wind criteria)" : ""}.` : "";
-    $("#riskText").innerHTML = `Potential loss from a bare, smooth, unsheltered field here (WEQ: soil index I = ${fmt(r.I, 0)} × climate C = ${fmt(r.C, 0)}).${esc(ei)}`
+    const est = !r.cSrc.startsWith("NRCS");
+    const ei = !r.EI ? "" : est ? ` Erodibility index C·I/T ≈ ${fmt(r.EI, 1)} with the estimated C; the NRCS test for highly erodible land (8 or more) uses NRCS's own C.`
+      : r.EI >= 8 ? ` Erodibility index C·I/T = ${fmt(r.EI, 1)}: meets the NRCS wind test for highly erodible land (8 or more) with these inputs; official determinations use NRCS's 1990 factors.`
+        : ` Erodibility index C·I/T = ${fmt(r.EI, 1)}; the NRCS wind test for highly erodible land starts at 8.`;
+    $("#riskText").innerHTML = `E = I × C / 100: soil erodibility I = ${fmt(r.I, 0)} t/ac/yr (range 0–310) × climatic factor C ${est ? "≈" : "="} ${fmt(r.C, 0)}`
+      + ` (${est ? "estimated; " : ""}Garden City, KS = 100${C_RANGE ? `; Texas ${C_RANGE}` : ""}).${esc(ei)}`
       + (peak ? ` Highest-risk window: <b>${esc(peak)}</b>.` : "")
       + ` Cover, residue, roughness and barriers can cut this by 80–99%.`;
   }
@@ -733,9 +778,13 @@
     const w = state.wind, s = state.soil;
     const surf = currentSurface();
     if (w && !w.error) {
+      const share = w.eroHours / 87.6; // % of the 8,760 hours in a year
       $("#stWind").innerHTML = speedTxt(w.meanSpeed);
+      $("#stWindS").textContent = `10 m height, ${w.start}–${w.end} average`;
       $("#stHours").innerHTML = `${fmt(w.eroHours, 0)} <small>h ≥ ${state.units === "mph" ? fmt(U.msToMph(w.thr), 0) + " mph" : w.thr + " m/s"}</small>`;
+      $("#stHoursS").textContent = `${fmt(share, share < 10 ? 1 : 0)}% of the 8,760 hours in a year`;
       $("#stDir").innerHTML = `${U.compass(w.prevailing)} <small>from ${fmt(w.prevailing, 0)}°</small>`;
+      $("#stDirS").textContent = "where most soil-moving wind comes from";
       $("#monthStrip").innerHTML = w.months.map((m, i) => `<div class="m ${m.level}" title="${U.MONTHS_LONG[i]}: ${(m.share * 100).toFixed(0)}% of annual risk"><i></i>${U.MONTHS[i][0]}</div>`).join("");
       const stn = state.windStation && state.windStation.meta;
       const via = state.windKey === "cal" ? ` Wind calibrated to ${stn.name.replace(/,.*$/, "")} (${stn.id}) airport records.`
@@ -744,17 +793,27 @@
         ? `High-risk: ${monthsText(w.riskMonths)}. Red months carry ≥ 10% of the year's erosive wind energy under dry conditions — keep the soil covered or rough then.`
         : "Erosive wind is spread evenly across the year here.") + via;
     } else if (w && w.error) {
-      ["stWind", "stHours", "stDir"].forEach(id => { $("#" + id).textContent = "n/a"; });
+      ["stWind", "stHours", "stDir"].forEach(id => { $("#" + id).textContent = "n/a"; $("#" + id + "S").textContent = ""; });
       $("#monthStrip").innerHTML = `<p class="fine" style="grid-column:1/-1">Wind history unavailable: ${esc(w.error)}</p>`;
     }
     if (surf) {
-      $("#stWeg").innerHTML = surf.weg ? `WEG ${esc(surf.weg)} <small>I = ${fmt(surf.wei, 0)}</small>` : "—";
-    } else if (s) $("#stWeg").textContent = "n/a";
+      $("#stWeg").innerHTML = surf.weg ? `${esc(surf.weg)} <small>· I = ${fmt(surf.wei, 0)} t/ac/yr</small>` : "—";
+      $("#stWegS").innerHTML = surf.weg ? `${wegStrip(surf.weg)}<span class="weg-ends"><span>1 most erodible</span><span>8 not erodible</span></span>`
+        + "I ranges from 0 to 310 t/ac/yr" : "no group for this soil";
+    } else if (s) { $("#stWeg").textContent = "n/a"; $("#stWegS").textContent = ""; }
     const cf = cFactor();
-    if (cf) $("#stC").innerHTML = `${fmt(cf.C, 0)} <small>${cf.src.startsWith("NRCS") ? "NRCS" : "est."}</small>`;
-    else if (s && w) $("#stC").textContent = "—";
-    if (state.nlcd) $("#stLc").textContent = state.nlcd.name || "n/a";
+    if (cf) {
+      $("#stC").innerHTML = `${fmt(cf.C, 0)} <small>${cf.src.startsWith("NRCS") ? "NRCS" : "est."}</small>`;
+      $("#stCS").textContent = `% of Garden City, KS (= 100)${C_RANGE ? `; Texas ${C_RANGE}` : ""}`;
+    } else if (s && w) { $("#stC").textContent = "—"; $("#stCS").textContent = ""; }
+    if (state.nlcd) {
+      $("#stLc").textContent = state.nlcd.name || "n/a";
+      $("#stLcS").textContent = { nlcd: "NLCD 2021, 30 m", io: "Sentinel-2 land cover, 10 m" }[state.nlcd.src] || "land-cover services did not answer";
+    }
   }
+
+  /* 1 2 3 4 4L 5 6 7 8 with this soil's group lit: the WEG scale in one line. */
+  const wegStrip = g => `<span class="weg-strip" aria-hidden="true">${S.WEG_INFO.map(w => `<i class="${w.g === g ? "on" : ""}">${w.g}</i>`).join("")}</span>`;
 
   /* ============ WIND TAB ============ */
   function renderWind() {
@@ -798,7 +857,7 @@
         ["Sand drift potential DP (Fryberger & Dean)", `${fmt(w.dp, 0)} VU · ${dpClass}`],
         ["Resultant drift RDP / direction", `${fmt(w.rdp, 0)} VU toward ${U.compass(w.rddF)}; RDP/DP ${fmt(w.rdp / Math.max(w.dp, 1e-9), 2)} (${w.rdp / Math.max(w.dp, 1e-9) < 0.3 ? "multidirectional" : w.rdp / Math.max(w.dp, 1e-9) < 0.8 ? "intermediate" : "unidirectional"})`],
       ] : []),
-      ["FAO wind-erosion climatic index (annual)", fmt(w.faoC, 0)],
+      ["FAO wind-erosion climatic index (annual)", `${fmt(w.faoC, 0)} (no fixed top; higher = windier and drier)`],
       ["Annual precipitation / ET₀", `${fmt(w.precip / 25.4, 1)} in / ${fmt(w.et0 / 25.4, 1)} in (P/ET₀ = ${fmt(w.aridity, 2)})`],
     ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("")
       + `<span class="d">${esc(sourceCaveat())}</span>`;
@@ -851,7 +910,8 @@
     if (cf) rows.push(["Climatic factor C", `${fmt(cf.C, 0)}`, cf.src.startsWith("NRCS") ? "NRCS climate-factor area in SSURGO (direct)" : "estimated from the wind series"]);
     if (e) rows.push(["Elevation and slope", `${fmt(e.z, 0)} m, ${fmt(e.slope, 1)}% slope`, e.src.startsWith("USGS") ? `${e.src}, ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")} (direct)` : `${e.src} via Open-Meteo (USGS did not respond)`]);
     if (state.nlcd) rows.push(["Land cover", state.nlcd.name || "no answer", state.nlcd.src === "nlcd" ? `NLCD 2021, ${A("https://www.mrlc.gov/", "MRLC")} WMS (direct)`
-      : `Sentinel-2 10 m land cover, ${A("https://livingatlas.arcgis.com/landcover/", "Impact Observatory, Microsoft, Esri")} (NLCD server refuses browser requests)`]);
+      : state.nlcd.src === "io" ? `Sentinel-2 10 m land cover, ${A("https://livingatlas.arcgis.com/landcover/", "Impact Observatory, Microsoft, Esri")} (NLCD server refuses browser requests)`
+        : "neither NLCD nor the Sentinel-2 land-cover service answered"]);
     return rows;
   }
   WG.siteSources = siteSources;
@@ -969,7 +1029,7 @@
     const others = s.components.filter(c => c.cokey !== d.cokey && c.comppct_r >= 5);
     const tex = surf ? (surf.texName || S.TEX[surf.texCode] || surf.texCode) : "—";
     const chips = [
-      surf && surf.weg ? `<span class="chip ${S.WEG_RISK[surf.weg] >= 4 ? "warn" : S.WEG_RISK[surf.weg] <= 1 ? "ok" : ""}">WEG ${esc(surf.weg)} · I ${fmt(surf.wei, 0)} t/ac/yr${surf.calc ? " (from your values)" : ""}</span>` : "",
+      surf && surf.weg ? `<span class="chip ${surf.wei >= 86 ? "warn" : surf.wei <= 38 ? "ok" : ""}" title="Wind Erodibility Group: nine classes from 1 (most erodible) to 8 (not erodible), with 4L between 4 and 5">WEG ${esc(surf.weg)} · I ${fmt(surf.wei, 0)} t/ac/yr${surf.calc ? " (from your values)" : ""}</span>` : "",
       tex ? `<span class="chip">Surface: ${esc(tex)}</span>` : "",
       site.slope !== null ? `<span class="chip">Slope ${fmt(site.slope, 1)}%</span>` : "",
       site.drainage ? `<span class="chip">${esc(site.drainage)}</span>` : "",
@@ -987,6 +1047,7 @@
     $("#soilSummary").innerHTML = html;
     $("#ovSoil").innerHTML = `<div class="nm">${esc(d.compname)} ${tex ? "· " + esc(tex) : ""}</div><div class="sub">${esc(s.mapunit.muname || "")}</div><div class="chips">${chips}</div>`;
     $("#soilSrcTag").textContent = `SSURGO · ${s.mapunit.areasymbol || ""}`;
+    renderWegTable(surf);
     const e = state.elev;
     $("#soilSource").innerHTML = `Source: USDA-NRCS Soil Survey Geographic Database (SSURGO) via <a href="https://sdmdataaccess.nrcs.usda.gov/" target="_blank" rel="noopener">Soil Data Access</a>, map unit key ${s.mukey}, ${esc(s.mapunit.areaname || "")}${s.mapunit.saverest ? `, survey dated ${esc(String(s.mapunit.saverest).slice(0, 10))}` : ""}. Elevation/slope: ${e ? esc(e.src) + (e.src.startsWith("USGS") ? " (Elevation Point Query Service)" : " via Open-Meteo") : "loading"}. Water retention for edited layers: Saxton &amp; Rawls (2006). <button class="link" data-methods="m-erod">Equations →</button>`;
     renderDerived();
@@ -1007,8 +1068,8 @@
     const ch = (a, b) => (state.edits && a !== b ? "chg" : "");
     const cells = [
       ["Texture class", surf.texName || S.TEX[surf.texCode] || "—", ch(surf.texCode, base.texCode)],
-      ["Wind erodibility group", surf.weg || "—", ch(surf.weg, base.weg)],
-      ["Erodibility index I", surf.wei !== null ? `${fmt(surf.wei, 0)} t/ac/yr` : "—", ch(surf.wei, base.wei)],
+      ["Wind erodibility group (1 most – 8 least)", surf.weg || "—", ch(surf.weg, base.weg)],
+      ["Erodibility index I (0–310)", surf.wei !== null ? `${fmt(surf.wei, 0)} t/ac/yr` : "—", ch(surf.wei, base.wei)],
       ["Organic carbon", surf.om !== null ? `${fmt(surf.om / 1.724, 2)}%` : "—", ""],
       ["Wilting point (15 bar)", sr ? `${fmt(sr.ll, 3)} cm³/cm³` : "—", ""],
       ["Field capacity (⅓ bar)", sr ? `${fmt(sr.dul, 3)} cm³/cm³` : "—", ""],
@@ -1018,11 +1079,27 @@
     const rw = S.rweq(surf), rw0 = S.rweq(base);
     if (rw) cells.push(
       ["RWEQ erodible fraction EF", `${fmt(rw.ef * 100, 0)}% < 0.84 mm${rw.inRange ? "" : " *"}`, ch(rw.ef.toFixed(3), rw0 && rw0.ef.toFixed(3))],
-      ["RWEQ crust factor SCF", `${fmt(rw.scf, 2)}${rw.inRange ? "" : " *"}`, ch(rw.scf.toFixed(3), rw0 && rw0.scf.toFixed(3))]);
+      ["RWEQ crust factor SCF (0–1, lower = firmer crust)", `${fmt(rw.scf, 2)}${rw.inRange ? "" : " *"}`, ch(rw.scf.toFixed(3), rw0 && rw0.scf.toFixed(3))]);
     $("#soilDerived").innerHTML = cells.map(([k, v, c]) => `<div><span>${esc(k)}</span><b class="${c}">${esc(v)}</b></div>`).join("")
       + (surf.calc ? `<div style="grid-column:1/-1"><span>WEG rule applied</span><b>${esc(surf.calc.why)}</b></div>` : "")
+      + (surf.kept ? `<div style="grid-column:1/-1"><span>Wind erodibility group</span><b>The survey's group is kept: your values give the same texture-rule result as the survey's.</b></div>` : "")
       + (rw && !rw.inRange ? `<div style="grid-column:1/-1"><span>* RWEQ check</span><b>This soil is outside the range of soils the RWEQ equations were fitted to; read EF and SCF as rough.</b></div>` : "");
   }
+
+  /* All nine groups with this soil's row marked (surf null: the plain table). */
+  function renderWegTable(surf) {
+    const g = surf && surf.weg;
+    $("#wegTag").textContent = g ? `this soil: WEG ${g}` : "";
+    const here = g ? `<span class="here">this soil${surf.texName ? `: ${esc(surf.texName)}` : ""}</span>` : "";
+    $("#wegTable").innerHTML = `<thead><tr><th>WEG</th><th class="l">Texture guide</th><th>I<small>t/ac/yr</small></th></tr></thead><tbody>`
+      + S.WEG_INFO.map(w => `<tr class="${w.g === g ? "on" : ""}"><td><b>${w.g}</b></td><td class="l"><b>${esc(w.name)}</b>${w.g === g ? ` ${here}` : ""}<span class="def">${esc(w.def)}</span></td><td>${w.I}</td></tr>`).join("")
+      + "</tbody>";
+  }
+
+  $("#wegFull").addEventListener("click", e => {
+    const full = $("#wegTable").classList.toggle("full");
+    e.target.textContent = !full ? "Show all definitions" : $("#wegTable tr.on") ? "Show only this soil's definition" : "Hide definitions";
+  });
 
   function onSoilEdit(e) {
     const s = state.soil;
@@ -1092,7 +1169,7 @@
       P("Dry albedo", f(site.albedo, 2)), P("Stage-1 evaporation limit", `${f(site.u, 0)} mm`), P("Drainage rate", site.drainRate !== null ? `${f(site.drainRate, 2)} /day` : "—"),
       P("Runoff curve number", f(site.cn, 0)), P("Avail. water 0–150 cm", site.aws150 !== null ? `${fmt(site.aws150, 1)} cm` : "—"),
       P("T factor (tolerable loss)", site.tfact !== null ? `${fmt(site.tfact, 0)} t/ac/yr` : "—"), P("Kw (surface)", f(site.kw, 2)),
-      P("WEG / I", surf ? `${esc(surf.weg || "—")} / ${f(surf.wei, 0)}` : "—"),
+      P("WEG / I (0–310)", surf ? `${esc(surf.weg || "—")} / ${f(surf.wei, 0)} t/ac/yr` : "—"),
       P("Capability class (dry / irr.)", `${esc(site.lcc || "—")} / ${esc(site.lccIrr || "—")}`),
       P("Climatic factor C", s.cFactor ? fmt(s.cFactor, 0) : "—"), P("Rainfall factor R", s.rFactor ? fmt(s.rFactor, 0) : "—"),
       P("Mean annual precip", site.map ? `${fmt(site.map / 25.4, 0)} in` : "—"), P("Mean annual air temp", site.airtemp ? `${fmt(site.airtemp, 1)} °C` : "—"),
@@ -1106,7 +1183,7 @@
     const plants = d.plants.filter(p => p.plantsciname).slice(0, 12);
     const plantTbl = plants.length ? `<div><h4>Reference native plant community (% of production)</h4><div class="table-wrap"><table class="grid"><thead><tr><th>Plant</th><th>Scientific name</th><th>%</th></tr></thead>
       <tbody>${plants.map(p => `<tr><td>${esc(p.plantcomname || p.plantsym)}</td><td class="l"><i>${esc(p.plantsciname)}</i></td><td>${f(num(p.rangeprod), 0)}</td></tr>`).join("")}</tbody></table></div></div>` : "";
-    const comps = `<div><h4>Components in this map unit</h4><div class="table-wrap"><table class="grid"><thead><tr><th>Component</th><th>%</th><th>WEG</th><th>I</th><th>Slope</th><th>Drainage</th><th>Ecological site</th></tr></thead>
+    const comps = `<div><h4>Components in this map unit</h4><div class="table-wrap"><table class="grid"><thead><tr><th>Component</th><th>%</th><th>WEG</th><th>I<small>t/ac/yr</small></th><th>Slope<small>%</small></th><th>Drainage</th><th>Ecological site</th></tr></thead>
       <tbody>${s.components.map(c => `<tr><td>${esc(c.compname)}${c.cokey === d.cokey ? " ★" : ""}</td><td>${f(c.comppct_r, 0)}</td><td>${esc(c.weg || "—")}</td><td>${f(num(c.wei), 0)}</td><td>${f(num(c.slope_r), 1)}</td><td class="l">${esc(c.drainagecl || "—")}</td><td class="l">${esc(c.eco ? c.eco.ecoclassname : "—")}</td></tr>`).join("")}</tbody></table></div></div>`;
     box.innerHTML = `<div><h4>Horizons — ${esc(d.compname)}</h4>${table}<p class="fine">Water retention, conductivity and bulk density come from the survey; rows marked ✎ use your edited values with Saxton &amp; Rawls (2006). Root growth factor = exp(−0.02 × mid-depth) below 15 cm, 0 below a restrictive layer. Total N estimated as organic C ÷ 10.</p></div>
       <div><h4>Site and classification</h4><div class="param-grid">${params}</div></div>

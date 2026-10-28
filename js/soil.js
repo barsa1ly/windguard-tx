@@ -20,7 +20,10 @@ WG.soil = (function () {
     COSL: "sandy loam", SL: "sandy loam", FSL: "sandy loam", VFSL: "sandy loam",
     L: "L", SIL: "SIL", SI: "SI", SCL: "SCL", CL: "CL", SICL: "SICL", SC: "SC", SIC: "SIC", C: "C",
   };
-  const ROCKY = /^(VST|XST|VBY|XBY|XCB|XFL|XCN)$/; // very/extremely stony or bouldery surfaces
+  // fragment modifiers in SSURGO texture codes (GR gravelly, CB cobbly, ST stony, BY bouldery, CN channery, FL flaggy,
+  // CR cherty) mean 15–35% by volume, 35–60% with V (very: STV) and 60–90% with X (extremely: CBX); NSSH 618.73
+  const FRAG_MOD = /^(GR|GRF|GRM|GRC|CB|ST|BY|CN|FL|CR)(V|X)?$/;
+  const modVolume = mods => mods.reduce((v, m) => { const k = FRAG_MOD.exec(m); return k ? Math.max(v, k[2] === "X" ? 75 : k[2] === "V" ? 47.5 : 25) : v; }, 0);
 
   /* ---------------- SDA ---------------- */
   async function sda(query) {
@@ -58,7 +61,7 @@ WG.soil = (function () {
              ch.claytotal_r, ch.sandvf_r, ch.sandfine_r, ch.sandmed_r, ch.sandco_r, ch.sandvc_r, ch.om_r,
              ch.dbthirdbar_r, ch.wthirdbar_r, ch.wfifteenbar_r, ch.wsatiated_r, ch.awc_r, ch.ksat_r,
              ch.ph1to1h2o_r, ch.cec7_r, ch.ecec_r, ch.caco3_r, ch.gypsum_r, ch.ec_r, ch.sar_r, ch.kwfact, ch.kffact,
-             ch.sieveno10_r, ch.frag3to10_r, ch.fraggt10_r, ch.lep_r, ch.partdensity, tg.texture, tg.texdesc
+             ch.sieveno10_r, ch.frag3to10_r, ch.fraggt10_r, ch.fragvoltot_r, ch.lep_r, ch.partdensity, tg.texture, tg.texdesc
            FROM chorizon ch LEFT JOIN chtexturegrp tg ON tg.chkey = ch.chkey AND tg.rvindicator = 'Yes'
            WHERE ch.cokey ${inMu} ORDER BY ch.cokey, ch.hzdept_r`),
       sda(`SELECT la.areasymbol, la.areaname, la.areatypename FROM muaoverlap mo
@@ -119,6 +122,13 @@ WG.soil = (function () {
     return { code: tex, base, mods: parts.filter(p => p !== base) };
   }
 
+  /* Fragments > 2 mm as weight % of the whole soil: the No. 10 sieve figure covers only the < 3 in part,
+     frag3to10_r and fraggt10_r (whole-soil weight %) the cobbles and stones. */
+  function wholeFrag(hz) {
+    const big = (num(hz.frag3to10_r) ?? 0) + (num(hz.fraggt10_r) ?? 0), pass = num(hz.sieveno10_r);
+    return pass === null ? big : Math.min(100, big + Math.max(0, 100 - pass) * (100 - big) / 100);
+  }
+
   function surfaceLayer(comp) {
     const hz = comp.horizons.find(h => num(h.sandtotal_r) !== null || num(h.claytotal_r) !== null) || comp.horizons[0];
     if (!hz) return null;
@@ -140,8 +150,9 @@ WG.soil = (function () {
       texName: hz.texdesc ? hz.texdesc.toLowerCase() : (TEX[tex.base] || null),
       weg: comp.weg ? String(comp.weg).trim() : null,
       wei: num(comp.wei),
-      rocky: tex.mods.some(m => ROCKY.test(m)),
-      cf: num(hz.sieveno10_r) !== null ? Math.max(0, 100 - num(hz.sieveno10_r)) : (num(hz.frag3to10_r) ?? 0) + (num(hz.fraggt10_r) ?? 0),
+      fragVol: num(hz.fragvoltot_r), // % by volume, whole soil
+      modVol: modVolume(tex.mods),
+      cf: wholeFrag(hz),
     };
   }
 
@@ -169,10 +180,11 @@ WG.soil = (function () {
     return fam(computed) === FAMILY[surveyCode] ? surveyCode : computed;
   }
 
-  /* ---------------- Wind Erodibility Group (NRCS NSSH Part 618.95, 2019) ----------------
+  /* ---------------- Wind Erodibility Group (NRCS NSSH Part 618, §618.93, amended 2024) ----------------
      Surface-layer texture classes. "Calcareous" in the NSSH means strong or violent effervescence
      with cold 1N HCl; there is no CaCO3 threshold, so CaCO3 >= 5% is used as the proxy.
-     Coarse fragments (footnote 1) move the group toward less erodible. Returns { weg, I, why }. */
+     Coarse fragments (footnote 31) move the group toward less erodible. Not applied: iron-rich mineralogy, andic
+     material, wetness and Folists; the survey's own group covers them for an unedited soil. Returns { weg, I, why }. */
   const WEG_I = { "1": 220, "2": 134, "3": 86, "4": 86, "4L": 86, "5": 56, "6": 48, "7": 38, "8": 0 };
   const WEG1_I = { VFS: 310, FS: 250, S: 220, COS: 160 };
 
@@ -182,8 +194,7 @@ WG.soil = (function () {
     const calc = (s.caco3 ?? 0) >= 5;
     const fam = FAMILY[code] || ({ S: "sand", LS: "loamy sand", SL: "sandy loam" }[code]);
     let weg, why;
-    if (s.rocky) { weg = "8"; why = "very stony/bouldery surface armors the soil"; }
-    else if ((s.om ?? 0) >= 20) { weg = "2"; why = "organic (sapric) surface"; }
+    if ((s.om ?? 0) >= 20) { weg = "2"; why = "organic (sapric) surface"; }
     else if (fam === "sand") { weg = "1"; why = "sand textures"; }
     else if (fam === "loamy sand") { weg = "2"; why = "loamy sand textures"; }
     else if (code === "VFSL" && clay <= 5) { weg = "2"; why = "very fine sandy loam with ≤ 5% clay"; }
@@ -200,16 +211,21 @@ WG.soil = (function () {
     else if (code === "SI") { weg = "7"; why = "noncalcareous silt"; }
     else { weg = null; why = "texture not classified"; }
     let I = weg === "1" ? (WEG1_I[code] ?? 220) : (weg ? WEG_I[weg] : null);
-    // coarse-fragment adjustment (volume % > 2 mm), NSSH 618.95 footnote 1
-    const cf = s.cf ?? 0;
+    // coarse-fragment adjustment, NSSH §618.93 footnote 31, by volume: SSURGO's fragment volume if given, else the sieve
+    // weight % converted with the bulk density and 2.65 g/cm3 for rock (17% by weight is about 10% by volume);
+    // at least the middle of the class a texture modifier gives (STV, very stony: 35–60%)
+    const w = Math.min(100, s.cf ?? 0), bd = s.bd || 1.45;
+    const fromWeight = w > 0 ? (100 * w / 2.65) / (w / 2.65 + (100 - w) / bd) : 0;
+    const cf = Math.max(s.fragVol ?? fromWeight, s.modVol ?? 0);
     if (weg && weg !== "8" && cf >= 15) {
       const sandy = weg === "1" || weg === "2";
       const steps = cf > 60 ? (sandy ? 3 : 99) : cf >= 35 ? (sandy ? 1 : 2) : (sandy ? 0 : 1);
       if (steps > 0) {
-        const ORDER = ["1", "2", "3", "4L", "5", "6", "7", "8"];
-        const at = ORDER.indexOf(weg === "4" ? "4L" : weg);
+        // one group less erodible = the next lower I (footnote 31: 160 → 134, 86 → 56), so 3, 4 and 4L all move to 5
+        const ORDER = ["1", "2", "3", "5", "6", "7", "8"];
+        const at = ORDER.indexOf(weg === "4" || weg === "4L" ? "3" : weg);
         const nw = ORDER[Math.min(ORDER.length - 1, at + steps)];
-        why += `; ${Math.round(cf)}% rock fragments → WEG ${nw}`;
+        why += `; ${Math.round(cf)}% rock fragments by volume → WEG ${nw}`;
         weg = nw;
         I = WEG_I[nw];
       }
@@ -217,7 +233,23 @@ WG.soil = (function () {
     return { weg, I, why };
   }
 
-  const WEG_RISK = { "1": 5, "2": 5, "3": 4, "4": 3, "4L": 3, "5": 2, "6": 2, "7": 1, "8": 0 };
+  /* The nine groups, most to least erodible, with the NSSH Part 618 §618.93 (2024) texture guide, for the class tables.
+     For a named soil NRCS uses the group recorded in the survey (NAM Part 502); the guide is for unidentified soils,
+     so a soil's group can differ from its texture (Pullman clay loam is WEG 7). Label a soil's group by number and I only.
+     I: wind erodibility index, t/ac/yr: loss from a wide, bare, smooth field in the climate of Garden City, KS. */
+  const WEG_INFO = [
+    { g: "1", name: "sands", I: "160–310", def: "Very fine sand, fine sand, sand or coarse sand. I runs from 160 for coarse sand to 310 for very fine sand (220 on average)." },
+    { g: "2", name: "loamy sands", I: "134", def: "Loamy very fine sand, loamy fine sand, loamy sand, loamy coarse sand; very fine sandy loam and silt loam with 5% clay or less; sapric (well-decomposed) organic material." },
+    { g: "3", name: "sandy loams", I: "86", def: "Very fine sandy loam with more than 5% clay, fine sandy loam, sandy loam, coarse sandy loam; noncalcareous silt loam with 20–50% very fine sand and 5–12% clay." },
+    { g: "4", name: "clays", I: "86", def: "Clay, silty clay; noncalcareous clay loam and silty clay loam with more than 35% clay (except iron-rich soils)." },
+    { g: "4L", name: "calcareous loams", I: "86", def: "Calcareous loam, silt loam, silt, sandy clay, sandy clay loam, clay loam and silty clay loam." },
+    { g: "5", name: "noncalcareous loams", I: "56", def: "Noncalcareous loam with less than 20% clay; noncalcareous silt loam with 5–20% clay (unless group 3); noncalcareous sandy clay loam and sandy clay; hemic (partly decomposed) organic material." },
+    { g: "6", name: "noncalcareous clayey loams", I: "48", def: "Noncalcareous loam and silt loam with 20% clay or more; noncalcareous clay loam and silty clay loam with 35% clay or less; iron-rich silt loam." },
+    { g: "7", name: "noncalcareous silts", I: "38", def: "Noncalcareous silt; iron-rich noncalcareous silty clay, silty clay loam and clay in Oxisols or Ultisols; fibric (raw) organic material. Texas surveys also place many clays and clay loams here, such as Pullman, Randall and Lockney." },
+    { g: "8", name: "rock-covered or wet", I: "0", def: "Soils that rock fragments on the surface or wetness keep from blowing; Folists (organic soils on rock)." },
+  ];
+  const WEG_BY = Object.fromEntries(WEG_INFO.map(w => [w.g, w]));
+  const wegInfo = g => WEG_BY[g] || null;
 
   /* ---------------- Saxton & Rawls (2006) ----------------
      sand, clay in %, om in % (capped at 8). Returns volumetric fractions, g/cm3, mm/h. */
@@ -379,5 +411,5 @@ WG.soil = (function () {
   }
 
   return { fetchSoil, parseTexture, textureClass, refineCode, wegFromSurface, saxtonRawls, profileLayers, siteParams,
-    rweq, toCSV, toSOL, TEX, FAMILY, WEG_I, WEG_RISK, curveNumber };
+    rweq, toCSV, toSOL, TEX, FAMILY, WEG_I, WEG_INFO, wegInfo, curveNumber };
 })();

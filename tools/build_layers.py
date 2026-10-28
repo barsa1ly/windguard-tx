@@ -245,7 +245,7 @@ def main():
                            {"label": "10–40  Moderate", "color": sus_colors[1]},
                            {"label": "40–80  High", "color": sus_colors[2]},
                            {"label": "80–150  Very high", "color": sus_colors[3]},
-                           {"label": "> 150  Extreme", "color": sus_colors[4]}],
+                           {"label": "≥ 150  Extreme", "color": sus_colors[4]}],
                 "note": "Potential annual loss from a bare, smooth, wide, unsheltered field: E = I × C/100 "
                         "(SSURGO Wind Erodibility Index × Chepil climatic factor). 40 t/ac/yr ≈ Erodibility "
                         "Index 8 for a soil with T = 5.",
@@ -254,10 +254,12 @@ def main():
                 "file": "data/layer_soil_weg.png",
                 "title": "Soil Wind Erodibility Group (SSURGO)",
                 "legend": [{"label": l, "color": c} for l, c in zip(
-                    ["1 · sands (I 160–310)", "2 · loamy sands (I 134)", "3 · sandy loams (I 86)",
-                     "4 · clays (I 86)", "4L · calcareous loams (I 86)", "5 · (I 56)", "6 · (I 48)",
-                     "7 · (I 38)", "8 · not erodible (I 0)"], weg_colors)],
-                "note": "Dominant-condition WEG of the surface layer, 800 m grid (UC Davis SoilWeb from SSURGO).",
+                    # rank and I only: a survey's group does not always match a texture name
+                    ["1 · most erodible (I 160–310)", "2 · I 134", "3 · I 86", "4 · I 86", "4L · I 86", "5 · I 56",
+                     "6 · I 48", "7 · I 38", "8 · not erodible (I 0)"], weg_colors)],
+                "note": "1 = most erodible, 8 = not erodible; 3, 4 and 4L share I = 86, and 4L holds calcareous "
+                        "(limy) loamy soils. I = wind erodibility index (t/ac/yr, 0–310). Dominant-condition WEG of "
+                        "the surface layer, 800 m grid (UC Davis SoilWeb from SSURGO).",
             },
             "wind": {
                 "file": "data/layer_wind_spring.png",

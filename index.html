@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=17">
+  <link rel="stylesheet" href="css/app.css?v=18">
 </head>
 <body>
 <div id="app" class="app">
@@ -163,17 +163,21 @@
             </div>
             <div class="risk-gauge" id="riskGauge" aria-hidden="true"></div>
           </div>
+          <div class="risk-legend">
+            <div class="risk-scale" id="riskScale" role="list" aria-label="Risk classes, tons per acre per year"></div>
+            <p class="risk-unit" id="riskUnit"></p>
+          </div>
           <p class="risk-text" id="riskText">Fetching soil survey and 10 years of hourly wind for this point.</p>
-          <button class="link risk-how" data-methods="m-erod">How this is calculated →</button>
+          <div class="risk-links"><button class="link risk-how" data-methods="m-erod">How this is calculated →</button><button class="link risk-how" data-methods="m-scales">What the numbers mean →</button></div>
         </div>
 
         <div class="stat-grid" id="statGrid">
-          <div class="stat"><span class="k">Mean wind</span><span class="v" id="stWind">—</span></div>
-          <div class="stat"><span class="k">Erosive wind hours/yr</span><span class="v" id="stHours">—</span></div>
-          <div class="stat"><span class="k">Prevailing erosive wind</span><span class="v" id="stDir">—</span></div>
-          <div class="stat"><span class="k">Soil erodibility</span><span class="v" id="stWeg">—</span></div>
-          <div class="stat"><span class="k">Climatic factor C</span><span class="v" id="stC">—</span></div>
-          <div class="stat"><span class="k">Land cover</span><span class="v" id="stLc">—</span></div>
+          <div class="stat"><span class="k">Mean wind</span><span class="v" id="stWind">—</span><span class="s" id="stWindS"></span></div>
+          <div class="stat"><span class="k">Erosive wind hours/yr</span><span class="v" id="stHours">—</span><span class="s" id="stHoursS"></span></div>
+          <div class="stat"><span class="k">Prevailing erosive wind</span><span class="v" id="stDir">—</span><span class="s" id="stDirS"></span></div>
+          <div class="stat"><span class="k">Wind Erodibility Group</span><span class="v" id="stWeg">—</span><span class="s" id="stWegS"></span></div>
+          <div class="stat"><span class="k">Climatic factor C</span><span class="v" id="stC">—</span><span class="s" id="stCS"></span></div>
+          <div class="stat"><span class="k">Land cover</span><span class="v" id="stLc">—</span><span class="s" id="stLcS"></span></div>
         </div>
 
         <div class="card">
@@ -302,7 +306,14 @@
             <label>pH<input type="number" id="inPh" min="3" max="10" step="0.1"></label>
           </div>
           <div class="derived" id="soilDerived"></div>
-          <p class="fine">Edits recalculate texture class, Wind Erodibility Group and index, RWEQ erodible fraction and crust factor, water-holding properties (Saxton &amp; Rawls 2006), and the practice plan. Silt fills automatically if sand + clay are given.</p>
+          <p class="fine">Edits recalculate texture class, Wind Erodibility Group and index (the survey's group stays unless your values change what the texture rules give), RWEQ erodible fraction and crust factor, water-holding properties (Saxton &amp; Rawls 2006), and the practice plan. Silt fills automatically if sand + clay are given.</p>
+        </div>
+
+        <div class="card" id="wegCard">
+          <div class="card-h"><h3>Wind Erodibility Groups: what the classes mean</h3><span class="tag" id="wegTag"></span></div>
+          <p class="fine">NRCS sorts surface soils into nine Wind Erodibility Groups (WEG) by how easily they blow when bare and dry: 1, 2, 3, 4, 4L, 5, 6, 7 and 8. Group <b>1</b> is the most erodible and group <b>8</b> is not erodible. Each group has an erodibility index <b>I</b>: the tons of soil per acre per year a wide, bare, smooth field would lose in the climate of Garden City, Kansas. I runs from 0 to 310; groups 3, 4 and 4L share I = 86, and 4L holds calcareous (limy) loamy soils.</p>
+          <div class="table-wrap"><table class="grid weg-table" id="wegTable"></table></div>
+          <p class="fine"><button class="link" id="wegFull">Show all definitions</button> · For a named soil, NRCS uses the group recorded in the soil survey; the texture guide is for soils that are not identified (<a href="https://efotg.sc.egov.usda.gov/references/public/TX/Wind_Erosion.pdf" target="_blank" rel="noopener">National Agronomy Manual, Part 502</a>). So a soil's group can differ from what its texture suggests: Pullman clay loam is WEG 7. Rock fragments move a soil to a less erodible group: one group at 15–35% by volume, two at 35–60%, I = 0 above 60% (sands and loamy sands move less). Texture guide: USDA-NRCS <a href="https://directives.nrcs.usda.gov/sites/default/files2/1725389517/Part%20618%20Subpart%20B%20%E2%80%93%20Exhibits.pdf" target="_blank" rel="noopener">National Soil Survey Handbook, Part 618 Subpart B</a>, §618.93 (2024). “Calcareous” means the soil fizzes strongly in dilute acid (free lime).</p>
         </div>
 
         <div class="card">
@@ -354,6 +365,7 @@
     <div class="sheet-h"><h3>Methods, equations &amp; data sources</h3><button class="icon-btn" id="methodsClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <nav class="seg-nav" id="methodsNav" aria-label="Sections">
       <button data-sec="m-site" class="on">This location</button>
+      <button data-sec="m-scales">Classes &amp; scales</button>
       <button data-sec="m-sources">Data sources</button>
       <button data-sec="m-erod">Erodibility</button>
       <button data-sec="m-wind">Wind &amp; climate</button>
@@ -389,15 +401,15 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=17"></script>
-<script src="data/stations.js?v=17"></script>
-<script src="js/util.js?v=17"></script>
-<script src="js/soil.js?v=17"></script>
-<script src="js/wind.js?v=17"></script>
-<script src="js/charts.js?v=17"></script>
-<script src="js/practices.js?v=17"></script>
-<script src="js/methods.js?v=17"></script>
-<script src="js/app.js?v=17"></script>
-<script src="js/area.js?v=17"></script>
+<script src="data/layers.js?v=18"></script>
+<script src="data/stations.js?v=18"></script>
+<script src="js/util.js?v=18"></script>
+<script src="js/soil.js?v=18"></script>
+<script src="js/wind.js?v=18"></script>
+<script src="js/charts.js?v=18"></script>
+<script src="js/practices.js?v=18"></script>
+<script src="js/methods.js?v=18"></script>
+<script src="js/app.js?v=18"></script>
+<script src="js/area.js?v=18"></script>
 </body>
 </html>
