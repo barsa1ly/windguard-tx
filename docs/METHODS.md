@@ -44,7 +44,21 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
 
 ## 3. Wind climatology at the point (Wind tab)
 
-**Data:** ERA5/ERA5-Land hourly 10 m wind speed and direction, plus daily precipitation, FAO-56 ET₀, daily max wind and daily max gust. These come from the Open-Meteo archive (`best_match`, ~9–25 km grid) for the last 5, 10 or 20 complete years, in local time. A 10-year request costs about 180 Open-Meteo "calls", against a free limit of 10,000 per day per IP.
+**Data:** hourly 10 m wind speed and direction, plus daily precipitation, FAO-56 ET₀ and daily max gust, from the Open-Meteo archive (`best_match`) for the last 5, 10 or 20 complete years, in local time.
+- For wind, `best_match` is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. I checked this against single-model requests; ERA5-Land does not supply wind here.
+- Daily max wind is taken from the hourly series.
+- A 10-year lookup costs about 180 Open-Meteo "calls" (130 at the site plus 52 at the station), against free limits of 600 per minute and 10,000 per day per IP.
+
+**Calibration to the nearest airport station (default):**
+- **Station data:** routine hourly METARs (2-minute mean wind at 10 m, plus gusts) from the Iowa Environmental Mesonet, for the same years.
+- **Quality control:** sustained wind > 40 m/s or gust > 55 m/s is dropped. Hobbs, for example, has 250-kt garbled reports that otherwise dominate cubic energy sums.
+- **Station choice:** the nearest station within 150 km with data from the start year and ≥ 60% of hours. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km handicap, because in West Texas several AWOS anemometers (Seminole, Andrews, Snyder, Pecos) read 40–60% fewer erosive hours than nearby ASOS. You can pick another station in the Wind tab.
+- **Method:** monthly empirical quantile mapping. It is trained on reanalysis at the station's grid cell versus the station on the same hours, using 101 quantiles between 0.1% and 99.9%, with end ratios beyond those. It is then applied to reanalysis at the site, so the model's site-vs-station difference is kept. Daily max gusts are mapped the same way against station daily max gusts. Direction and timing stay from the reanalysis.
+- **Other sources you can select:** "Airport station only" (rain and ET₀ still from the reanalysis) and "Reanalysis only".
+- **Check, Lubbock 2016–2025:** reanalysis vs LBB mean wind 4.41 vs 5.24 m/s, hourly r = 0.80, RMSE 1.85 m/s. Erosive hours (≥ 8 m/s) were 5.3% vs 15.1%.
+  - Calibrated: 1,304 erosive h/yr vs the station's 1,321 (reanalysis 451).
+  - High-risk months: Feb–May calibrated and station, Jan–Apr reanalysis.
+  - Drift potential: 553 VU calibrated vs 153 VU reanalysis.
 
 **Fallback:** NASA POWER daily data (MERRA-2, ~50 km), with Hargreaves ET₀ (Ra from FAO-56 Eq. 21).
 
@@ -68,11 +82,11 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
 - DP classes: low < 200, intermediate 200–399, high ≥ 400 VU.
 - RDP/DP: multidirectional < 0.3, intermediate < 0.8, unidirectional ≥ 0.8.
 
-**Prevailing erosive wind** is the sector with the most above-threshold wind. Barrier and strip orientation is that direction plus 90°.
+**Prevailing erosive wind** is the 22.5° sector carrying the most erosive energy Σu²(u − uₜ), smoothed with half weight on its neighbors. Barrier and strip orientation is that direction plus 90°.
 
 **Trend:** ordinary least-squares slope of erosive hours per year, with a two-sided t-test at 95%.
 
-Reanalysis smooths wind over the grid cell, so absolute hours and DP are conservative compared with station anemometers. The seasonal pattern and direction are robust.
+Airport anemometers sit on open, mown ground, so calibrated values describe exposed fields. Sheltered sites blow less.
 
 ## 4. Soil profile (Soil tab and exports)
 

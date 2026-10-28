@@ -211,7 +211,24 @@ WG.charts = (function () {
     el.innerHTML = s + `</svg>`;
   }
 
+  /* Monthly erosive hours by source: airport station, raw reanalysis, calibrated. */
+  function calib(all) {
+    const ds = [];
+    if (all.station) ds.push({ type: "bar", label: "Airport station", data: all.station.months.map(m => +m.eroHours.toFixed(1)), backgroundColor: "rgba(47,111,159,.35)", borderRadius: 4, order: 3 });
+    if (all.cal) ds.push({ type: "line", label: "Calibrated (this point)", data: all.cal.months.map(m => +m.eroHours.toFixed(1)), borderColor: C.red, backgroundColor: C.red, borderWidth: 2.5, pointRadius: 2.5, tension: .3, order: 1 });
+    if (all.model) ds.push({ type: "line", label: "Reanalysis only", data: all.model.months.map(m => +m.eroHours.toFixed(1)), borderColor: C.muted, backgroundColor: C.muted, borderDash: [5, 4], borderWidth: 2, pointRadius: 0, tension: .3, order: 2 });
+    draw("chCal", {
+      data: { labels: MONTHS, datasets: ds },
+      options: {
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom" } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: "erosive hours / yr" } }, x: { grid: { display: false } } },
+      },
+    });
+  }
+
   function resizeAll() { Object.values(charts).forEach(c => c.resize()); }
 
-  return { season, speeds, water, trend, rose, gauge, resizeAll, C };
+  return { season, speeds, water, trend, rose, gauge, calib, resizeAll, C };
 })();

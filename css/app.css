@@ -633,3 +633,4 @@ table.grid td.l { text-align: left; }
 .prac .cite a, .fine a[title] { color: var(--blue); text-decoration: none; font-weight: 600; }
 .wind-arrow { pointer-events: none; }
 .wind-arrow svg { overflow: visible; filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, .9)); }
+.mini-select { height: 30px; max-width: 60%; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; font-size: 12px; background: var(--surface); }

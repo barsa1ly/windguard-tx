@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=6">
+  <link rel="stylesheet" href="css/app.css?v=11">
 </head>
 <body>
 <div id="app" class="app">
@@ -134,6 +134,13 @@
       <!-- WIND -->
       <section class="tab" id="tab-wind" role="tabpanel" hidden>
         <div class="toolbar">
+          <label>Wind data
+            <select id="srcSel">
+              <option value="cal">Calibrated to nearest airport</option>
+              <option value="station">Airport station only</option>
+              <option value="model">Reanalysis only</option>
+            </select>
+          </label>
           <label>Period
             <select id="periodSel">
               <option value="5">Last 5 years</option>
@@ -183,6 +190,14 @@
           <div class="card-h"><h3>Year-to-year trend</h3><span class="tag" id="trendTag"></span></div>
           <div class="chart-box"><canvas id="chTrend"></canvas></div>
           <p class="fine" id="trendNote"></p>
+        </div>
+
+        <div class="card" id="calCard" hidden>
+          <div class="card-h"><h3>Reanalysis vs airport station</h3>
+            <select id="stnSel" class="mini-select" aria-label="Calibration station"></select></div>
+          <div class="chart-box"><canvas id="chCal"></canvas></div>
+          <div class="kv" id="calKv" style="margin-top:10px"></div>
+          <p class="fine">Hourly reanalysis smooths wind over a 9–28 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the airport (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
         </div>
 
         <div class="card">
@@ -268,12 +283,13 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=6"></script>
-<script src="js/util.js?v=6"></script>
-<script src="js/soil.js?v=6"></script>
-<script src="js/wind.js?v=6"></script>
-<script src="js/charts.js?v=6"></script>
-<script src="js/practices.js?v=6"></script>
-<script src="js/app.js?v=6"></script>
+<script src="data/layers.js?v=11"></script>
+<script src="data/stations.js?v=11"></script>
+<script src="js/util.js?v=11"></script>
+<script src="js/soil.js?v=11"></script>
+<script src="js/wind.js?v=11"></script>
+<script src="js/charts.js?v=11"></script>
+<script src="js/practices.js?v=11"></script>
+<script src="js/app.js?v=11"></script>
 </body>
 </html>

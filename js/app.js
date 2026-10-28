@@ -11,6 +11,12 @@
     soil: null,          // fetched SSURGO profile
     edits: null,         // user surface overrides {sand, silt, clay, om, caco3, ph}
     windRaw: null,
+    windSets: null,      // {model, cal, station} raw series
+    windStation: null,   // nearest-station data used for calibration
+    windSource: "cal",   // preferred source: cal | station | model
+    windKey: null,       // source actually shown
+    windAll: null,       // analyses of every available source
+    windCompare: null,   // reanalysis vs station statistics
     wind: null,
     units: "mph",
     thr: 8,
@@ -334,7 +340,7 @@
     if (!inTexasish) U.toast("This tool is built for Texas — results outside Texas may be incomplete.");
     state.site = { lat, lon };
     state.token++;
-    state.soil = null; state.edits = null; state.wind = null; state.windRaw = null; state.nlcd = null; state.elev = null;
+    state.soil = null; state.edits = null; state.wind = null; state.windRaw = null; state.windSets = null; state.windStation = null; state.nlcd = null; state.elev = null;
     state.place = opts.place || null;
 
     const ll = L.latLng(lat, lon);
@@ -408,6 +414,10 @@
     const { lat, lon } = state.site;
     const live = () => tok === state.token;
     try {
+      // nearest airport station loads in parallel; the reanalysis shows first, calibration follows
+      state.windStationChoice = null;
+      const stationJob = findStationRetry(lat, lon, tok);
+      state.windStationPending = true;
       let raw;
       try {
         raw = await Wd.fetchWind(lat, lon, state.period);
@@ -416,14 +426,70 @@
         raw = await Wd.fetchPower(lat, lon, state.period);
       }
       if (!live()) return;
-      state.windRaw = raw;
-      state.wind = Wd.analyze(raw, state.thr);
+      state.windSets = { model: raw };
+      state.windStation = null;
+      chooseWind();
       renderWind(); renderRisk(); renderStats(); renderPractices();
+      applyStation(await stationJob, tok);
     } catch (err) {
       if (!live()) return;
+      state.windStationPending = false;
       state.wind = { error: err.message || String(err) };
       renderWind(); renderRisk(); renderStats();
     }
+  }
+
+  /* Station lookup; on an Open-Meteo per-minute quota error wait a minute and try once more. */
+  async function findStationRetry(lat, lon, tok) {
+    try {
+      return await Wd.findStation(lat, lon, state.period);
+    } catch (e) {
+      if (!/limit/i.test(e.message || "")) { console.warn("station lookup failed", e); return null; }
+      state.windStationRetry = true;
+      if (tok === state.token && state.windSets) renderWind();
+      await new Promise(r => setTimeout(r, 65000));
+      state.windStationRetry = false;
+      if (tok !== state.token) return null;
+      return Wd.findStation(lat, lon, state.period).catch(() => null);
+    }
+  }
+
+  function applyStation(st, tok) {
+    if (tok !== state.token || !state.windSets) return;
+    state.windStationPending = false;
+    const raw = state.windSets.model;
+    state.windSets = { model: raw };
+    state.windStation = st;
+    if (st) {
+      state.windSets.station = Wd.stationRaw(raw, st);
+      if (!raw.dailyOnly) state.windSets.cal = Wd.calibrate(raw, st);
+    }
+    chooseWind();
+    renderWind(); renderRisk(); renderStats(); renderPractices();
+  }
+
+  /* User picked another calibration station. */
+  $("#stnSel").addEventListener("change", async e => {
+    const tok = state.token, id = e.target.value;
+    if (!state.site || !state.windSets) return;
+    state.windStationChoice = id;
+    state.windStationPending = true;
+    renderWind();
+    const st = await Wd.findStation(state.site.lat, state.site.lon, state.period, id).catch(() => null);
+    if (!st) U.toast(`No usable data at ${id} for this period.`);
+    applyStation(st || state.windStation, tok);
+  });
+
+  /* Pick the preferred available wind series and analyze every source for the comparison card. */
+  function chooseWind() {
+    const sets = state.windSets || {};
+    const pref = state.windSource;
+    const key = sets[pref] ? pref : sets.cal ? "cal" : sets.station && sets.model && sets.model.dailyOnly ? "station" : "model";
+    state.windKey = key;
+    state.windRaw = sets[key];
+    state.windAll = Object.fromEntries(Object.entries(sets).map(([k, r]) => [k, Wd.analyze(r, state.thr)]));
+    state.wind = state.windAll[key];
+    state.windCompare = state.windStation ? Wd.compare(state.windStation, state.thr) : null;
   }
 
   async function reverseGeocode(lat, lon) {
@@ -549,9 +615,12 @@
       $("#stHours").innerHTML = `${fmt(w.eroHours, 0)} <small>h ≥ ${state.units === "mph" ? fmt(U.msToMph(w.thr), 0) + " mph" : w.thr + " m/s"}</small>`;
       $("#stDir").innerHTML = `${U.compass(w.prevailing)} <small>from ${fmt(w.prevailing, 0)}°</small>`;
       $("#monthStrip").innerHTML = w.months.map((m, i) => `<div class="m ${m.level}" title="${U.MONTHS_LONG[i]}: ${(m.share * 100).toFixed(0)}% of annual risk"><i></i>${U.MONTHS[i][0]}</div>`).join("");
-      $("#monthStripNote").textContent = w.riskMonths.length
+      const stn = state.windStation && state.windStation.meta;
+      const via = state.windKey === "cal" ? ` Wind calibrated to ${stn.name.replace(/,.*$/, "")} (${stn.id}) airport records.`
+        : state.windKey === "station" ? ` From ${stn.id} airport records.` : state.windStationPending ? " Calibrating to the nearest airport…" : " Uncalibrated reanalysis.";
+      $("#monthStripNote").textContent = (w.riskMonths.length
         ? `High-risk: ${monthsText(w.riskMonths)}. Red months carry ≥ 10% of the year's erosive wind energy under dry conditions — keep the soil covered or rough then.`
-        : "Erosive wind is spread evenly across the year here.";
+        : "Erosive wind is spread evenly across the year here.") + via;
     } else if (w && w.error) {
       ["stWind", "stHours", "stDir"].forEach(id => { $("#" + id).textContent = "n/a"; });
       $("#monthStrip").innerHTML = `<p class="fine" style="grid-column:1/-1">Wind history unavailable: ${esc(w.error)}</p>`;
@@ -574,8 +643,17 @@
       return;
     }
     $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
-    $("#windSrcTag").textContent = w.dailyOnly ? "daily (fallback)" : `hourly ${w.start}–${w.end}`;
+    const stn = state.windStation && state.windStation.meta;
+    const key = state.windKey;
+    $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${w.start}–${w.end}`
+      : key === "station" ? `${stn.id} station · ${w.start}–${w.end}`
+        : state.windStationRetry ? "model · data limit, retrying in 1 min" : state.windStationPending ? "model · calibrating…" : w.dailyOnly ? "daily (fallback)" : `model · ${w.start}–${w.end}`;
+    const sel = $("#srcSel");
+    const sets = state.windSets || {};
+    [...sel.options].forEach(o => { o.disabled = !sets[o.value]; });
+    sel.value = key;
     if (!$("#tab-wind").hidden) renderWindCharts();
+    renderCalibration();
     const yrs = `${w.start}–${w.end}`;
     const t = w.trend;
     $("#trendTag").textContent = t ? `${t.slope >= 0 ? "+" : ""}${fmt(t.slope * 10, 0)} h/decade` : "";
@@ -598,10 +676,51 @@
       ["FAO wind-erosion climatic index (annual)", fmt(w.faoC, 0)],
       ["Annual precipitation / ET₀", `${fmt(w.precip / 25.4, 1)} in / ${fmt(w.et0 / 25.4, 1)} in (P/ET₀ = ${fmt(w.aridity, 2)})`],
     ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("")
-      + `<span class="d">Reanalysis winds are smoothed over a ~9–25 km cell and run lower than station winds, so absolute hours and drift potential are conservative; month-to-month pattern and direction are reliable.</span>`;
-    $("#windSource").innerHTML = w.dailyOnly
-      ? `Source: NASA POWER daily (MERRA-2, ~50 km) fallback, ${yrs}.`
-      : `Source: hourly 10 m wind, precipitation and FAO-56 ET₀ from ERA5/ERA5-Land reanalysis via <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener">Open-Meteo</a>, grid cell ${fmt(w.gridLat, 3)}, ${fmt(w.gridLon, 3)}, ${yrs}.`;
+      + `<span class="d">${esc(sourceCaveat())}</span>`;
+    const OM = `<a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener">Open-Meteo</a>`;
+    const IEMa = `<a href="https://mesonet.agron.iastate.edu/request/download.phtml" target="_blank" rel="noopener">Iowa Environmental Mesonet</a>`;
+    const model = state.windSets && state.windSets.model;
+    const reanalysis = model && model.dailyOnly
+      ? "NASA POWER daily (MERRA-2, ~50 km)"
+      : `ECMWF IFS 9 km analysis (2017 on) and ERA5 0.25° reanalysis (before 2017) via ${OM}, grid cell ${fmt(model ? model.lat : w.gridLat, 3)}, ${fmt(model ? model.lon : w.gridLon, 3)}`;
+    $("#windSource").innerHTML = key === "cal"
+      ? `Source: hourly 10 m wind from ${reanalysis}, calibrated month by month (quantile mapping) to hourly observations at ${esc(stn.name)} (${stn.id}, ${fmt(stn.km, 0)} km away, ${fmt(stn.coverage * 100, 0)}% of hours) from the ${IEMa}. Precipitation and FAO-56 ET₀ from the reanalysis. ${yrs}.`
+      : key === "station"
+        ? `Source: hourly airport observations (2-minute mean wind at 10 m) at ${esc(stn.name)} (${stn.id}, ${fmt(stn.km, 0)} km away, ${fmt(stn.coverage * 100, 0)}% of hours) from the ${IEMa}. Precipitation and ET₀ from ${reanalysis}. ${yrs}.`
+        : `Source: hourly 10 m wind, precipitation and FAO-56 ET₀ from ${reanalysis}, ${yrs}. Not calibrated.`;
+  }
+
+  function sourceCaveat() {
+    const stn = state.windStation && state.windStation.meta;
+    if (state.windKey === "cal") return `Speeds follow the measured distribution at ${stn.id} for each month; timing and direction come from the reanalysis at this point. Airport winds are measured on open ground, so sheltered sites blow less.`;
+    if (state.windKey === "station") return `Measured at the ${stn.id} airport, ${fmt(stn.km, 0)} km away; local terrain and surface can differ from this field.`;
+    return state.windStationPending ? "Calibrating to the nearest airport station…"
+      : "Uncalibrated reanalysis: at Lubbock and Midland it caught only ~40–45% of erosive hours and shifted the peak months earlier. No airport station with enough data within 150 km.";
+  }
+
+  function renderCalibration() {
+    const card = $("#calCard");
+    const c = state.windCompare, st = state.windStation, all = state.windAll || {};
+    if (!st || !c) {
+      card.hidden = !state.windStationPending;
+      $("#calKv").innerHTML = `<span class="k">Looking for the nearest airport station…</span><span class="v"></span>`;
+      return;
+    }
+    card.hidden = false;
+    const m = st.meta;
+    const cands = Wd.nearestStations(state.site.lat, state.site.lon, Wd.yearsFor(state.period).start);
+    $("#stnSel").innerHTML = cands.map(c => `<option value="${esc(c.id)}" ${c.id === m.id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name.replace(/,.*$/, ""))} · ${fmt(c.km, 0)} km${c.awos ? " · AWOS" : ""}</option>`).join("");
+    const sp = v => state.units === "mph" ? `${fmt(U.msToMph(v), 1)} mph` : `${fmt(v, 2)} m/s`;
+    const tm = a => a ? WG.monthsText(a.riskMonths) || "—" : "—";
+    $("#calKv").innerHTML = [
+      ["Station", `${m.name} (${m.id}${m.awos ? ", AWOS" : ""})`],
+      ["Distance · data coverage", `${fmt(m.km, 0)} km · ${fmt(m.coverage * 100, 0)}% of hours`],
+      ["Mean wind: station vs model", `${sp(c.meanObs)} vs ${sp(c.meanMod)} (${c.bias >= 0 ? "+" : ""}${fmt((c.bias / c.meanObs) * 100, 0)}%)`],
+      ["Hourly agreement", `r = ${fmt(c.r, 2)}, RMSE ${sp(c.rmse)}`],
+      ["Erosive hours caught by model", `${fmt((c.freqMod / Math.max(c.freqObs, 1e-9)) * 100, 0)}% (${fmt(c.freqMod * 100, 1)}% vs ${fmt(c.freqObs * 100, 1)}% of hours)`],
+      ["High-risk months: station / model / calibrated", `${tm(all.station)} / ${tm(all.model)} / ${tm(all.cal)}`],
+    ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("");
+    if (!$("#tab-wind").hidden) Ch.calib(all);
   }
 
   function orientation(w) {
@@ -620,6 +739,7 @@
     Ch.water(w);
     Ch.trend(w);
     Ch.rose($("#roseBox"), w, state.units);
+    if (state.windAll && state.windAll.station) Ch.calib(state.windAll);
     const tot = w.rose.reduce((a, r) => a + r.bins.reduce((x, y) => x + y, 0), 0);
     $("#roseNote").textContent = `Erosive winds blow ${fmt(tot, 1)}% of the time, mostly from the ${U.compass(w.prevailing)}. Soil moves toward the ${U.compass(w.rdd)}.`;
   }
@@ -627,9 +747,13 @@
   $("#unitSel").addEventListener("change", e => { state.units = e.target.value; renderWind(); renderStats(); });
   $("#thrRange").addEventListener("input", U.debounce(e => {
     state.thr = +e.target.value;
-    if (state.windRaw) { state.wind = Wd.analyze(state.windRaw, state.thr); renderWind(); renderStats(); renderRisk(); renderPractices(); }
+    if (state.windSets) { chooseWind(); renderWind(); renderStats(); renderRisk(); renderPractices(); }
     $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
   }, 120));
+  $("#srcSel").addEventListener("change", e => {
+    state.windSource = e.target.value;
+    if (state.windSets) { chooseWind(); renderWind(); renderStats(); renderRisk(); renderPractices(); }
+  });
   $("#periodSel").addEventListener("change", e => {
     state.period = +e.target.value;
     if (!state.site) return;
