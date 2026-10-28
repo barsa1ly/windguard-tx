@@ -14,7 +14,7 @@
     windSets: null,      // {model, cal, station} raw series
     windStation: null,   // nearest-station data used for calibration
     windSource: "cal",   // preferred source: cal | station | model
-    gridModel: "ecmwf",  // gridded wind: ecmwf (IFS/ERA5 via Open-Meteo) | merra2 (NASA POWER)
+    gridModel: "merra2", // gridded wind: merra2 (NASA POWER, direct) | ecmwf (IFS/ERA5 via Open-Meteo, the backup)
     windKey: null,       // source actually shown
     windAll: null,       // analyses of every available source
     windCompare: null,   // reanalysis vs station statistics
@@ -705,11 +705,11 @@
     $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
     const stn = state.windStation && state.windStation.meta;
     const key = state.windKey;
-    const mShort = (MODEL[w.model] || MODEL.ecmwf).short;
+    const mShort = (MODEL[w.model] || MODEL.merra2).short;
     $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${w.start}–${w.end}`
       : key === "station" ? `${stn.id} station · ${w.start}–${w.end}`
         : state.windStationRetry ? `${mShort} · data limit, retrying in 1 min` : state.windStationPending ? `${mShort} · calibrating…` : `${mShort} · ${w.start}–${w.end}`;
-    $("#moistTag").textContent = { gridmet: "gridMET 4 km", "open-meteo": "ECMWF (fallback)", "nasa-power": "NASA POWER (fallback)" }[(w.moisture || {}).source] || "";
+    $("#moistTag").textContent = { gridmet: "gridMET 4 km", "nasa-power": "NASA POWER (fallback)", "open-meteo": "Open-Meteo (fallback)" }[(w.moisture || {}).source] || "";
     $("#modelSel").value = (state.windSets.model || {}).model || state.gridModel;
     const sel = $("#srcSel");
     const sets = state.windSets || {};
@@ -753,8 +753,8 @@
   };
   const MOIST = {
     gridmet: `gridMET 4 km (University of Idaho), read directly from its ${A("https://www.climatologylab.org/gridmet.html", "THREDDS server")}`,
-    "open-meteo": `ECMWF IFS/ERA5 via ${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} (gridMET did not respond)`,
-    "nasa-power": `NASA POWER daily, Hargreaves ET₀ (gridMET and Open-Meteo did not respond)`,
+    "nasa-power": `NASA POWER daily (MERRA-2 weather) with FAO-56 Penman–Monteith ET₀ computed in the app, direct (gridMET did not respond)`,
+    "open-meteo": `ECMWF IFS/ERA5 via ${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} (gridMET and NASA POWER did not respond)`,
   };
   const OBS = {
     ncei: `NOAA NCEI ${A("https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly", "GHCNh")} (direct)`,

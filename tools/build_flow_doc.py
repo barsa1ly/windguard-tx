@@ -167,8 +167,8 @@ def fig_overview():
         ("soil", "USGS 3DEP elevation", ["Elevation Point Query Service", "5 points → slope and aspect"], False),
         ("soil", "Land cover", ["NLCD 2021 (MRLC); when blocked,", "Sentinel-2 10 m (Esri / Impact Obs.)"], False),
         ("wx", "gridMET daily weather", ["Univ. of Idaho THREDDS server, 4 km", "rain, grass reference ET₀, Tmax/Tmin"], False),
-        ("wx", "ECMWF hourly wind (default)", ["Open-Meteo archive: re-hosted copy", "10 m speed, direction, daily gust"], True),
-        ("wx", "NASA MERRA-2 hourly wind", ["NASA POWER API, ~50 km cell", "if chosen, or ECMWF fails or > 20 s"], False),
+        ("wx", "NASA MERRA-2 hourly wind (default)", ["NASA POWER API, ~50 km cell", "10 m speed and direction"], False),
+        ("wx", "ECMWF hourly wind (backup)", ["Open-Meteo archive: re-hosted copy", "if NASA fails or > 20 s, or chosen"], True),
         ("wx", "NOAA airport records (GHCNh)", ["NCEI data service; IEM copy as backup", "hourly wind and gusts at the airport"], False),
         ("built", "Airport station list (built in)", ["417 stations (NOAA ISD + GHCNh lists)", "6 nearest within 150 km, ASOS first"], False),
     ]
@@ -267,10 +267,10 @@ def fig_wind():
                     (xs[2], "C   Daily moisture", 3.95)]:
         s.panel(x, ptop, LW, h, t)
     A = chain(xs[0], [
-        ("wx", "ECMWF via Open-Meteo", ["default · 9 km; ERA5 before 2017", "hourly speed, direction; daily gust",
-                                       "usually answers in 1–3 s"], 1.05, True, "error, or no answer in 20 s", True),
-        ("wx", "NASA MERRA-2", ["NASA POWER API · direct", "0.5° × 0.625° · 2001 on",
-                              "no gusts: daily max wind used"], 1.05, False, None, False),
+        ("wx", "NASA MERRA-2 (default)", ["NASA POWER API · direct", "0.5° × 0.625° · 2001 on",
+                                        "no gusts: daily max wind used"], 1.05, False, "error, or no answer in 20 s", True),
+        ("wx", "ECMWF via Open-Meteo", ["backup copy · 9 km (ERA5 earlier)", "hourly speed, direction; daily gust",
+                                       "also used when you choose it"], 1.05, True, None, False),
     ], ptop - 0.42)
     B = chain(xs[1], [
         ("built", "Pick the station", ["6 nearest within 150 km", "record covers the period", "ASOS ranked ahead of AWOS"],
@@ -278,13 +278,14 @@ def fig_wind():
         ("wx", "NOAA NCEI GHCNh", ["routine (FM-15) reports", "drop QC flags 2, 3, 6, 7", "wind ≤ 40, gust ≤ 55 m/s",
                                   "nearest report to each hour"], 1.22, False, "coverage < 60 %", True),
         ("wx", "IEM ASOS copy", ["still < 60 %: next station"], 0.68, True, None, False),
-        ("wx", "Model at the station's cell", ["same model, same years", "(Open-Meteo or NASA POWER)"], 0.88, False, None, False),
+        ("wx", "Model at the station's cell", ["same model, same years", "(NASA POWER or Open-Meteo)"], 0.88, False, None, False),
     ], ptop - 0.42)
     C = chain(xs[2], [
         ("wx", "gridMET (Univ. of Idaho)", ["direct · 4 km · daily", "rain, grass ET₀ (ASCE PM),", "Tmax and Tmin"],
          1.05, False, "fails, or < 80 % of days", True),
-        ("wx", "Open-Meteo daily (ECMWF)", ["rain, FAO-56 ET₀, mean temp."], 0.68, True, "fails", True),
-        ("wx", "NASA POWER daily", ["rain; ET₀ by Hargreaves"], 0.68, False, None, False),
+        ("wx", "NASA POWER daily", ["direct · rain, temp., dew point,", "wind, sun → Penman–Monteith ET₀"], 0.88, False,
+         "fails", True),
+        ("wx", "Open-Meteo daily (ECMWF)", ["backup copy · rain, FAO-56 ET₀"], 0.68, True, None, False),
     ], ptop - 0.42)
 
     q_top = 4.55
@@ -401,12 +402,11 @@ SOURCES = [
     ("Land cover", "MRLC NLCD 2021; Esri / Impact Observatory", "WMS GetFeatureInfo; ImageServer identify (direct)",
      "30 m; Sentinel-2 10 m", "Sentinel-2 when NLCD is blocked (currently always: MRLC refuses web-page requests)"),
     ("Daily rain, grass reference ET₀, Tmax, Tmin", "University of Idaho gridMET", "THREDDS OPeNDAP, one cell (direct)",
-     "4 km, daily, 1979 on; last ~4 days not yet published", "Open-Meteo daily (ECMWF), then NASA POWER daily with Hargreaves ET₀"),
-    ("Hourly 10 m wind speed and direction, daily max gust (default)", "ECMWF: IFS analysis from 2017, ERA5 before",
-     "Open-Meteo archive (re-hosted copy); two requests in parallel", "9 km from 2017; 0.25° (~28 km) before",
-     "NASA MERRA-2 if Open-Meteo errors or has not answered within 20 s"),
-    ("Hourly 10 m wind speed and direction (alternative)", "NASA GMAO MERRA-2", "NASA POWER hourly API (direct)",
-     "0.5° × 0.625° (~50 km), 2001 on; no gust variable", "ECMWF via Open-Meteo"),
+     "4 km, daily, 1979 on; last ~4 days not yet published", "NASA POWER daily with Penman–Monteith ET₀ computed in the app, then Open-Meteo daily (ECMWF)"),
+    ("Hourly 10 m wind speed and direction (default)", "NASA GMAO MERRA-2", "NASA POWER hourly API (direct)",
+     "0.5° × 0.625° (~50 km), 2001 on; no gust variable", "ECMWF via Open-Meteo if NASA POWER errors or has not answered within 20 s"),
+    ("Hourly 10 m wind, daily max gust (backup, or when chosen)", "ECMWF: IFS analysis from 2017, ERA5 before",
+     "Open-Meteo archive (re-hosted copy)", "9 km from 2017; 0.25° (~28 km) before", "NASA MERRA-2"),
     ("Airport hourly wind and gusts (for calibration)", "NOAA NCEI GHCNh", "NCEI Access Data Service, one request per year, 6 at a time (direct)",
      "station, hourly", "Iowa Environmental Mesonet ASOS copy; then the next station"),
     ("Airport station list", "NOAA ISD history + GHCNh station list", "built into the app (data/stations.js)",
@@ -441,7 +441,9 @@ WIND_CALC = [
     ("Gust days", "days with daily max gust ≥ 17.9 m/s (40 mph)", "daily gust → days/month", "`analyze`"),
     ("Trend", "least-squares slope of yearly erosive hours and mean wind, with significance test", "yearly totals → trend",
      "util.js · `linreg`"),
-    ("Reference ET (last fallback)", "Hargreaves: ET₀ = 0.0023 Ra (Tmean + 17.8) √(Tmax − Tmin)", "NASA POWER daily → ET₀",
+    ("Reference ET when gridMET fails", "FAO-56 Penman–Monteith from NASA POWER Tmax, Tmin, dew point, 2 m wind and solar "
+     "radiation (Rn = 0.77 Rs − Rnl, G = 0); Hargreaves 0.0023 Ra (T + 17.8) √(Tmax − Tmin) on days missing an input",
+     "NASA POWER daily → ET₀",
      "wind.js · `powerDaily`"),
 ]
 
@@ -474,7 +476,7 @@ SOIL_CALC = [
 RESULTS = [
     ("Risk class and E (Overview)", "E = I × C / 100", "SSURGO: WEG → I, climatic factor C"),
     ("Erodibility index EI", "E / T", "SSURGO soil-loss tolerance T"),
-    ("Erosive hours, mean wind", "count of hours ≥ threshold; mean", "ECMWF (Open-Meteo) or MERRA-2, calibrated to the NOAA airport"),
+    ("Erosive hours, mean wind", "count of hours ≥ threshold; mean", "NASA MERRA-2 (ECMWF via Open-Meteo as backup), calibrated to the NOAA airport"),
     ("Red and amber months", "energy × dryness, share of the year", "calibrated wind + gridMET rain and ET₀"),
     ("Prevailing erosive direction", "sector with most erosive energy", "calibrated wind direction"),
     ("Wind Erodibility Group, C, land cover", "read as published (WEG recomputed if you edit)", "SSURGO; NLCD or Sentinel-2"),
@@ -507,9 +509,10 @@ STEPS = [
      "derives texture, WEG, I and water properties, and the risk card can show E as soon as the soil arrives."),
     ("Elevation and land cover, at the same time.", " Five USGS 3DEP elevations give slope and aspect (15 s limit, then "
      "Copernicus via Open-Meteo). Land cover comes from NLCD (8 s limit) or the Sentinel-2 10 m map."),
-    ("Gridded wind and moisture, at the same time.", " Hourly wind for the chosen period comes from ECMWF through "
-     "Open-Meteo (usually 1–3 s) or NASA MERRA-2. If Open-Meteo errors or has not answered within 20 s, the app switches "
-     "to MERRA-2. Daily rain and ET₀ come from gridMET. The Wind tab first shows the model, uncalibrated."),
+    ("Gridded wind and moisture, at the same time.", " Hourly wind for the chosen period comes straight from NASA "
+     "(MERRA-2 through NASA POWER, usually 1–3 s). If NASA errors or has not answered within 20 s, the app switches to "
+     "ECMWF through Open-Meteo. Daily rain and ET₀ come from gridMET, else NASA POWER, else Open-Meteo. The Wind tab "
+     "first shows the model, uncalibrated."),
     ("Airport calibration, in the background.", " The app takes up to 6 nearby airports from its built-in list, downloads "
      "hourly records from NOAA one year per request, keeps the first station with at least 60 % of hours, downloads the "
      "same model at that station's cell, trains the monthly quantile mapping and redraws every result as calibrated."),
@@ -522,14 +525,16 @@ STEPS = [
 LIMITS = [
     ("Texas only.", " The outline is the Census 1:5,000,000 boundary, kept within about 0.2 km of that source; a point a "
      "few hundred metres from the state line can land on the wrong side."),
-    ("ECMWF comes through a copy.", " Copernicus's own data store needs each user's personal key and a queued job that "
-     "takes minutes, so the app reads Open-Meteo's copy, which arrives in seconds. NASA MERRA-2 is the direct alternative "
-     "and the automatic fallback."),
+    ("Open-Meteo is only a backup.", " Every default source is direct. Open-Meteo steps in for wind when NASA POWER "
+     "errors or has not answered within 20 s, for daily weather when gridMET and NASA POWER both fail, for elevation when "
+     "USGS fails, and when you choose ECMWF (Copernicus's own store needs each user's key and a queued job). After "
+     "calibration both models give 1,291–1,295 erosive h/yr at Lubbock."),
     ("NLCD is blocked.", " MRLC's server refuses requests from web pages, so land cover currently always comes from the "
      "Sentinel-2 10 m map."),
-    ("MERRA-2 has no gusts.", " Its daily maximum hourly wind stands in for gusts during calibration, and gust days show n/a."),
+    ("MERRA-2 has no gusts.", " Its daily maximum hourly wind stands in for gusts during calibration; without an airport, "
+     "gust days show n/a."),
     ("gridMET lags a few days.", " The newest ~4 days are not yet published; a point with less than 80 % of days falls "
-     "back to Open-Meteo and then NASA POWER."),
+     "back to NASA POWER and then Open-Meteo."),
     ("Station rules.", " A station needs at least 60 % of hours in the period (20 % if you pick it yourself). AWOS sites are "
      "ranked as if 100 km farther, because several West Texas AWOS anemometers read 40–60 % fewer erosive hours than "
      "nearby ASOS sites."),

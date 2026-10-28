@@ -4,15 +4,15 @@ This file lists every calculation the app makes, with its source. `docs/RESEARCH
 
 ## 0. Data sources
 
-"Direct" means the app downloads from the agency that produces the data.
+"Direct" means the app downloads from the agency that produces the data. Every default source is direct; Open-Meteo is only a backup (hourly wind after 20 s without an answer from NASA POWER, daily weather when gridMET and NASA POWER both fail, elevation when USGS fails) or the ECMWF option.
 
 | Data | Producer | How the app reads it | Resolution · period | If it fails |
 |---|---|---|---|---|
-| Hourly 10 m wind (default) | ECMWF IFS analysis; ERA5 (Copernicus C3S) | Open-Meteo archive, a copy. ECMWF/CDS need a personal key and queued jobs, which a web page can't use. | 9 km (2017 on); 0.25° (before) | NASA MERRA-2 |
-| Hourly 10 m wind (option) | NASA GMAO MERRA-2 | NASA POWER hourly API, direct | 0.5° × 0.625°, 2001 on | ECMWF via Open-Meteo |
-| Daily max gust | ECMWF IFS / ERA5 | Open-Meteo | as above | MERRA-2 has none; calibration maps daily max wind to station gusts |
+| Hourly 10 m wind (default) | NASA GMAO MERRA-2 | NASA POWER hourly API, direct | 0.5° × 0.625°, 2001 on | ECMWF via Open-Meteo, after 20 s without an answer |
+| Hourly 10 m wind (backup or option) | ECMWF IFS analysis; ERA5 (Copernicus C3S) | Open-Meteo archive, a copy. ECMWF/CDS need a personal key and queued jobs, which a web page can't use. | 9 km (2017 on); 0.25° (before) | NASA MERRA-2 |
+| Daily max gust | ECMWF IFS / ERA5 only | Open-Meteo, with ECMWF wind | as above | MERRA-2 has none; calibration maps daily max wind to station gusts |
 | Airport observations | NWS/FAA ASOS/AWOS, archived in NOAA NCEI GHCNh (ISD stopped Aug 2025) | NCEI Access Data Service, direct; wind columns, one request per year | routine hourly METAR | Iowa Environmental Mesonet ASOS archive |
-| Precipitation, grass ET₀, Tmax/Tmin | gridMET, University of Idaho (Abatzoglou 2013) | THREDDS OPeNDAP, direct; packing read from the file | 4 km daily, 1979 on | ECMWF daily via Open-Meteo, then NASA POWER daily + Hargreaves |
+| Precipitation, grass ET₀, Tmax/Tmin | gridMET, University of Idaho (Abatzoglou 2013) | THREDDS OPeNDAP, direct; packing read from the file | 4 km daily, 1979 on | NASA POWER daily, direct, with FAO-56 Penman–Monteith ET₀ computed in the app; then ECMWF daily via Open-Meteo |
 | Soil profile, WEG, I, T, MLRA, C | USDA-NRCS SSURGO | Soil Data Access, direct | 1:12k–1:24k map units | none |
 | Elevation, slope, aspect | USGS 3DEP | Elevation Point Query Service, direct | 1–10 m | Copernicus GLO-90 via Open-Meteo |
 | Land cover | USGS/MRLC NLCD 2021 | MRLC WMS, direct (MRLC currently refuses browser requests) | 30 m | Sentinel-2 10 m land cover, latest year (Impact Observatory, Microsoft, Esri) |
@@ -20,7 +20,8 @@ This file lists every calculation the app makes, with its source. `docs/RESEARCH
 
 **Checks, 2016–2025:**
 - **NOAA GHCNh vs the Iowa Mesonet:** at Lubbock (LBB) the two give 1,322 and 1,321 erosive h/yr. At Hobbs (HOB) GHCNh covers 97% of hours against 68% for the Iowa Mesonet routine reports. On shared hours the erosive share agrees (10.9% vs 10.8%), but the missing Iowa Mesonet hours were mostly calm, so its annual total read high (959 vs 820 h/yr).
-- **NASA MERRA-2 vs LBB:** hourly r = 0.71, RMSE 1.96 m/s, mean 4.94 vs 5.24 m/s, 8.7% vs 15.1% erosive hours. ECMWF: r = 0.80, RMSE 1.85 m/s, mean 4.41 m/s, 5.3%. After calibration both give the same months and direction at a Gaines County test site: 823 h/yr with MERRA-2 and 784 h/yr with ECMWF, both Jan–Apr and WSW.
+- **NASA MERRA-2 vs LBB:** hourly r = 0.71, RMSE 1.96 m/s, mean 4.94 vs 5.24 m/s, 8.7% vs 15.1% erosive hours. ECMWF: r = 0.80, RMSE 1.85 m/s, mean 4.41 m/s, 5.3%. After calibration both give the same months and direction: at Lubbock 1,295 h/yr with MERRA-2 and 1,291 with ECMWF (Feb–Apr, WSW); at a Gaines County test site 823 and 784 h/yr (Jan–Apr, WSW). MERRA-2 is the default because it comes straight from NASA.
+- **NASA POWER Penman–Monteith ET₀ vs gridMET** (Lubbock, 2016–2025): 1,984 vs 1,886 mm/yr (+5%), same monthly pattern; rain 428 vs 447 mm/yr.
 
 ## 1. Bare-soil wind-erosion potential (Overview risk card, statewide map)
 
@@ -70,12 +71,12 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
 ## 3. Wind climatology at the point (Wind tab)
 
 **Data:** for the last 5, 10 or 20 complete years:
-- **Hourly 10 m wind speed and direction.** You choose the gridded model on the Wind tab, and each model is the other's automatic fallback. The app switches from ECMWF to MERRA-2 when Open-Meteo returns an error or has not started answering within 20 s (it normally answers in 1–3 s); once data is arriving, a slow download is allowed up to 90 s.
-  - **ECMWF (default):** the Open-Meteo archive `best_match`, which is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. ERA5-Land does not supply wind here. Daily max gust comes with it.
-  - **NASA MERRA-2:** the NASA POWER hourly API, UTC, at 0.5° × 0.625°. It has no gust variable.
-- **Daily precipitation, grass reference ET₀ (ASCE Penman–Monteith) and Tmax/Tmin:** gridMET over OPeNDAP, one 4 km cell. Scale factor, offset and fill value are read from the dataset attributes. The fallbacks are Open-Meteo daily precipitation, FAO-56 ET₀ and mean temperature, then NASA POWER daily with Hargreaves ET₀.
+- **Hourly 10 m wind speed and direction.** You choose the gridded model on the Wind tab, and each model is the other's automatic fallback: when the chosen source returns an error or has not started answering within 20 s (both normally answer in 1–3 s), the app switches; once data is arriving, a slow download is allowed up to 90 s.
+  - **NASA MERRA-2 (default):** the NASA POWER hourly API, direct, UTC, at 0.5° × 0.625°. It has no gust variable.
+  - **ECMWF (backup or option):** the Open-Meteo archive `best_match`, which is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. ERA5-Land does not supply wind here. Daily max gust comes with it.
+- **Daily precipitation, grass reference ET₀ (ASCE Penman–Monteith) and Tmax/Tmin:** gridMET over OPeNDAP, one 4 km cell. Scale factor, offset and fill value are read from the dataset attributes. The first fallback is NASA POWER daily (direct): precipitation, temperature, dew point, 2 m wind and all-sky solar radiation, from which the app computes FAO-56 Penman–Monteith ET₀ (Allen et al. 1998, Eqs. 6–21 and 37–40; albedo 0.23, G = 0; Hargreaves on days missing an input). The last fallback is Open-Meteo daily precipitation, FAO-56 ET₀ and mean temperature.
 - **Daily max wind** comes from the hourly series.
-- **Open-Meteo cost:** a 10-year ECMWF lookup costs about 130 Open-Meteo "calls" (78 at the site plus 52 at the station), against free limits of 600 per minute and 10,000 per day per IP. MERRA-2 uses no Open-Meteo calls.
+- **Open-Meteo cost:** the default lookup makes no Open-Meteo calls. If you pick ECMWF, a 10-year lookup costs about 130 Open-Meteo "calls" (78 at the site plus 52 at the station), against free limits of 600 per minute and 10,000 per day per IP.
 
 **Calibration to the nearest airport station (default):**
 - **Station data:** routine hourly METARs (FM-15: 2-minute mean wind at 10 m, plus gusts) from NOAA NCEI GHCNh, one request per year. The report nearest each whole hour is kept, and NCEI quality codes 2, 3, 6 and 7 (suspect or erroneous) are dropped. Stations without a GHCNh id, or with GHCNh coverage below the threshold, use the Iowa Environmental Mesonet ASOS archive.

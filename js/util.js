@@ -49,15 +49,18 @@ WG.util = (function () {
     }
   }
 
-  async function fetchText(url, timeoutMs = 45000) {
+  async function fetchText(url, timeoutMs = 45000, headerMs = timeoutMs) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const hdrTimer = setTimeout(() => ctrl.abort(), headerMs);
     try {
       const r = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(hdrTimer);
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
       return await r.text();
     } finally {
       clearTimeout(timer);
+      clearTimeout(hdrTimer);
     }
   }
 

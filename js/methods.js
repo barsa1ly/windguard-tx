@@ -7,18 +7,19 @@ WG.methods = (function () {
 
   /* [data, producer, how the app reads it, resolution · period, if it fails] */
   const SOURCES = [
-    ["Hourly 10 m wind speed and direction (default)", "ECMWF: IFS operational analysis; ERA5 reanalysis by Copernicus C3S",
-      `${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} archive, a re-hosted copy (about 1–3 s for 10–20 years). Copernicus's own data store needs each user's personal key and a queued job that takes minutes.`,
-      "9 km hourly (2017 on); 0.25° (~28 km) hourly (before 2017)", "NASA MERRA-2, if Open-Meteo errors or has not answered within 20 s"],
-    ["Hourly 10 m wind speed and direction (alternative)", "NASA GMAO MERRA-2 reanalysis",
-      `<b>Direct:</b> ${A("https://power.larc.nasa.gov/docs/services/api/temporal/hourly/", "NASA POWER")} hourly API`, "0.5° × 0.625° (~50 km) hourly, 2001 on", "ECMWF via Open-Meteo"],
-    ["Daily maximum gust (model)", "ECMWF IFS / ERA5", "Open-Meteo, with the hourly wind", "as above",
-      "MERRA-2 has no gust; calibration then maps daily max wind to airport gusts"],
+    ["Hourly 10 m wind speed and direction (default)", "NASA GMAO MERRA-2 reanalysis",
+      `<b>Direct:</b> ${A("https://power.larc.nasa.gov/docs/services/api/temporal/hourly/", "NASA POWER")} hourly API (about 1–3 s for 10–20 years)`,
+      "0.5° × 0.625° (~50 km) hourly, 2001 on", "ECMWF via Open-Meteo, if NASA POWER errors or has not answered within 20 s"],
+    ["Hourly 10 m wind speed and direction (backup, or when chosen)", "ECMWF: IFS operational analysis; ERA5 reanalysis by Copernicus C3S",
+      `${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} archive, a re-hosted copy. Copernicus's own data store needs each user's personal key and a queued job that takes minutes.`,
+      "9 km hourly (2017 on); 0.25° (~28 km) hourly (before 2017)", "NASA MERRA-2"],
+    ["Daily maximum gust (model)", "ECMWF IFS / ERA5 only", "Open-Meteo, with the ECMWF hourly wind", "as above",
+      "MERRA-2 has no gust variable: calibration maps its daily max wind to airport gusts"],
     ["Airport wind observations (ASOS/AWOS)", `NWS/FAA stations, archived by NOAA NCEI in ${A("https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly", "GHCNh")} (successor to ISD, which stopped in Aug 2025)`,
       `<b>Direct:</b> ${A("https://www.ncei.noaa.gov/access/services/data/v1", "NCEI Access Data Service")}, wind columns only, one request per year`, "station, routine hourly METAR, decades",
       `${A("https://mesonet.agron.iastate.edu/request/download.phtml", "Iowa Environmental Mesonet")} ASOS archive (NWS METAR feed)`],
     ["Daily precipitation, grass reference ET₀, max/min temperature", `${A("https://www.climatologylab.org/gridmet.html", "gridMET")}, University of Idaho (Abatzoglou 2013): PRISM-based precipitation, NLDAS-2 meteorology, ASCE Penman–Monteith ET₀`,
-      `<b>Direct:</b> ${A("https://thredds.northwestknowledge.net/thredds/reacch_climate_MET_aggregated_catalog.html", "THREDDS")} OPeNDAP, one cell, scale and offset read from the file`, "4 km (1/24°) daily, 1979 on", "ECMWF daily via Open-Meteo, then NASA POWER daily"],
+      `<b>Direct:</b> ${A("https://thredds.northwestknowledge.net/thredds/reacch_climate_MET_aggregated_catalog.html", "THREDDS")} OPeNDAP, one cell, scale and offset read from the file`, "4 km (1/24°) daily, 1979 on", "NASA POWER daily, direct (Penman–Monteith ET₀ computed in the app), then ECMWF daily via Open-Meteo"],
     ["Soil profile, WEG, I, T, MLRA, climatic factor C", "USDA-NRCS Soil Survey Geographic Database (SSURGO)",
       `<b>Direct:</b> ${A("https://sdmdataaccess.nrcs.usda.gov/", "Soil Data Access")} REST queries`, "map units, 1:12,000–1:24,000", "none: enter a soil test on the Soil tab"],
     ["Elevation, slope, aspect", "USGS 3D Elevation Program (3DEP)", `<b>Direct:</b> ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")}, 5 points`, "1–10 m lidar/DEM", "Copernicus GLO-90 via Open-Meteo"],
@@ -95,8 +96,11 @@ WG.methods = (function () {
     ["Grass reference ET₀ (computed by gridMET)", "ET₀ = [0.408 Δ (R<sub>n</sub> − G) + γ (900 / (T + 273)) u₂ (e<sub>s</sub> − e<sub>a</sub>)] / [Δ + γ (1 + 0.34 u₂)]",
       "ASCE standardized Penman–Monteith, daily, short grass: Δ slope of vapor-pressure curve, R<sub>n</sub> net radiation, G soil heat flux, γ psychrometric constant, e<sub>s</sub> − e<sub>a</sub> vapor-pressure deficit.",
       "Dryness factor, moisture chart", "ASCE-EWRI 2005; Abatzoglou 2013", USED],
+    ["Grass reference ET₀ from NASA POWER (computed in the app)", "same Penman–Monteith form, daily: R<sub>n</sub> = 0.77 R<sub>s</sub> − R<sub>nl</sub>; e<sub>a</sub> from dew point; γ from elevation",
+      "FAO-56 Eqs. 6–21 and 37–40 with POWER T<sub>max</sub>, T<sub>min</sub>, dew point, 2 m wind and all-sky solar radiation R<sub>s</sub> (MJ m⁻² d⁻¹). At Lubbock it runs 5% above gridMET (1,984 vs 1,886 mm/yr) with the same monthly pattern.",
+      "When gridMET fails", "Allen et al. 1998 (FAO-56)", FALLBACK],
     ["Hargreaves ET₀", "ET₀ = 0.0023 (R<sub>a</sub> / 2.45)(T + 17.8) √(T<sub>max</sub> − T<sub>min</sub>)", "R<sub>a</sub>: extraterrestrial radiation, FAO-56 Eq. 21; T in °C.",
-      "Only if gridMET and Open-Meteo both fail", "Hargreaves &amp; Samani 1985", FALLBACK],
+      "Only for NASA POWER days missing radiation, dew point or wind", "Hargreaves &amp; Samani 1985", FALLBACK],
   ];
 
   const SOIL = [
@@ -133,7 +137,7 @@ WG.methods = (function () {
 
   function render() {
     $("#methodsBody").innerHTML = `
-      <p class="fine">“Direct” means the app downloads from the agency that produces the data. The default ECMWF wind is the exception: Copernicus's data store needs each user's personal key and a queued job that takes minutes, so the app reads Open-Meteo's copy of the same fields, which arrives in seconds. If Open-Meteo errors or has not answered within 20 s, the app switches to NASA MERRA-2. Pick <b>NASA MERRA-2 (direct)</b> under Model on the Wind tab for a fully direct path; at Lubbock its hourly correlation with the airport is 0.71 against 0.80 for ECMWF, and calibration removes most of the difference in monthly totals.</p>
+      <p class="fine">“Direct” means the app downloads from the agency that produces the data. Every default source is direct. Open-Meteo is only a backup: for hourly wind when NASA POWER errors or has not answered within 20 s, for daily weather when gridMET and NASA POWER both fail, and for elevation when USGS fails. You can still pick <b>ECMWF (Open-Meteo copy)</b> under Model on the Wind tab; Copernicus's own data store needs each user's personal key and a queued job that takes minutes. At Lubbock, ECMWF tracks the airport hour by hour slightly better (r = 0.80 against 0.71 for MERRA-2), and after calibration both give 1,291–1,295 erosive h/yr, Feb–Apr, from the WSW.</p>
       <section id="m-site"><h4>This location</h4>${siteHTML()}</section>
       <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}</section>
       <section id="m-erod"><h4>Erodibility equations</h4>${table(EQ_COLS, eqRows(EROD), "eqs")}</section>

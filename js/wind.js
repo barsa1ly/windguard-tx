@@ -1,7 +1,8 @@
-/* Wind and moisture data, read from the producers wherever a browser page can reach them:
-   - hourly 10 m wind: ECMWF IFS 9 km (2017 on) / ERA5 0.25° (before) through Open-Meteo's copy (ECMWF and the Copernicus
-     CDS need an account key and queued jobs), or NASA MERRA-2 directly from NASA POWER; each is the other's fallback;
-   - daily precipitation, grass reference ET and temperature: gridMET 4 km, directly from the University of Idaho THREDDS server;
+/* Wind and moisture data, read from the producers first; Open-Meteo's copy is only a fallback:
+   - hourly 10 m wind: NASA MERRA-2 directly from NASA POWER; ECMWF IFS 9 km (2017 on) / ERA5 0.25° (before) through
+     Open-Meteo when NASA fails or is chosen (ECMWF and the Copernicus CDS need an account key and queued jobs);
+   - daily precipitation, grass reference ET and temperature: gridMET 4 km from the University of Idaho THREDDS server,
+     then NASA POWER daily (Penman–Monteith ET0 computed here), then Open-Meteo;
    - airport observations: NOAA NCEI GHCNh (official archive), else the Iowa Environmental Mesonet ASOS archive.
    The gridded wind is calibrated to the nearest airport station, then analyzed for erosive wind climate. */
 WG.wind = (function () {
@@ -25,14 +26,16 @@ WG.wind = (function () {
   }
 
   /* ---- hourly gridded wind ---- */
-  async function ecmwfWind(lat, lon, y0, y1) {
+  /* headerMs: how long to wait for the server to start answering (fetchWind uses 20 s before switching models;
+     a download that has started may still run to 90 s). */
+  async function ecmwfWind(lat, lon, y0, y1, headerMs = 90000) {
     const n = y1 - y0 + 1, chunk = n > 6 ? Math.ceil(n / 2) : n, spans = [];
     for (let y = y0; y <= y1; y += chunk) spans.push([y, Math.min(y1, y + chunk - 1)]); // parallel chunks cut wall-clock time
     const parts = await Promise.all(spans.map(([a, b]) => fetchJSON(`${ARCHIVE}?${new URLSearchParams({
       latitude: lat.toFixed(4), longitude: lon.toFixed(4), start_date: `${a}-01-01`, end_date: `${b}-12-31`,
       hourly: "wind_speed_10m,wind_direction_10m", daily: "wind_gusts_10m_max",
       wind_speed_unit: "ms", timezone: "America/Chicago", timeformat: "unixtime",
-    })}`, {}, 90000, 20000))); // no answer within 20 s → fetchWind switches to MERRA-2; a slow download is still allowed to finish
+    })}`, {}, 90000, headerMs)));
     const cat = (k, sect) => parts.flatMap(p => p[sect][k]);
     const off = parts[0].utc_offset_seconds, dt = cat("time", "daily"), g = cat("wind_gusts_10m_max", "daily");
     return {
@@ -42,10 +45,10 @@ WG.wind = (function () {
     };
   }
 
-  async function powerHourly(lat, lon, y0, y1) {
+  async function powerHourly(lat, lon, y0, y1, headerMs) {
     const q = new URLSearchParams({ parameters: "WS10M,WD10M", community: "AG", longitude: lon.toFixed(4), latitude: lat.toFixed(4),
       start: `${y0}0101`, end: `${y1}1231`, format: "CSV", "time-standard": "UTC" });
-    const [head, body = ""] = (await fetchText(`${POWER_H}?${q}`, 90000)).split("-END HEADER-");
+    const [head, body = ""] = (await fetchText(`${POWER_H}?${q}`, 90000, headerMs)).split("-END HEADER-");
     const elev = +((head.match(/= *(-?[\d.]+) *meters/) || [])[1]);
     const t = [], ws = [], wd = [];
     body.trim().split("\n").slice(1).forEach(l => {
@@ -60,10 +63,10 @@ WG.wind = (function () {
   }
 
   /* NASA MERRA-2 has no gust variable; gust stays empty and calibration maps daily max wind to station gusts. */
-  async function merraWind(lat, lon, y0, y1) {
+  async function merraWind(lat, lon, y0, y1, headerMs = 90000) {
     const n = y1 - y0 + 1, h = Math.floor(n / 2);
     const spans = n > 10 ? [[y0, y0 + h - 1], [y0 + h, y1]] : [[y0, y1]];
-    const parts = await Promise.all(spans.map(([a, b]) => powerHourly(lat, lon, a, b)));
+    const parts = await Promise.all(spans.map(([a, b]) => powerHourly(lat, lon, a, b, headerMs)));
     const cat = k => parts.flatMap(p => p[k]);
     return {
       model: "merra2", lat: Math.round(lat / 0.5) * 0.5, lon: Math.round(lon / 0.625) * 0.625, elevation: parts[0].elevation,
@@ -100,7 +103,7 @@ WG.wind = (function () {
     return { source, d0, p: pick(cols.p), et0: pick(cols.et0), tmean: pick(cols.tmean), lat, lon };
   }
 
-  /* gridMET first; then ECMWF daily via Open-Meteo; then NASA POWER daily with Hargreaves ET0. */
+  /* Producers first: gridMET, then NASA POWER daily; Open-Meteo's ECMWF daily only if both fail. */
   async function fetchMoisture(lat, lon, y0, y1) {
     const d0 = epochDay(y0, 0, 1), n = epochDay(y1, 11, 31) - d0 + 1;
     try {
@@ -113,50 +116,68 @@ WG.wind = (function () {
       const tmean = days.map((_, k) => (tx[k] == null || tn[k] == null ? null : (tx[k] + tn[k]) / 2 - 273.15));
       return align("gridmet", d0, n, days, { p, et0, tmean }, 49.4 - j / 24, -124.7666666333 + i / 24);
     } catch (e) {
-      console.warn("gridMET unavailable, trying Open-Meteo daily", e);
+      console.warn("gridMET unavailable, trying NASA POWER daily", e);
     }
     try {
-      const j = await fetchJSON(`${ARCHIVE}?${new URLSearchParams({
-        latitude: lat.toFixed(4), longitude: lon.toFixed(4), start_date: `${y0}-01-01`, end_date: `${y1}-12-31`,
-        daily: "precipitation_sum,et0_fao_evapotranspiration,temperature_2m_mean", timezone: "America/Chicago", timeformat: "unixtime",
-      })}`, {}, 90000);
-      const D = j.daily;
-      return align("open-meteo", d0, n, D.time.map(t => stampDay(t, j.utc_offset_seconds)),
-        { p: D.precipitation_sum, et0: D.et0_fao_evapotranspiration, tmean: D.temperature_2m_mean }, j.latitude, j.longitude);
+      return await powerDaily(lat, lon, y0, y1, d0, n);
     } catch (e) {
-      console.warn("Open-Meteo daily unavailable, trying NASA POWER daily", e);
+      console.warn("NASA POWER daily unavailable, trying Open-Meteo daily", e);
     }
-    return powerDaily(lat, lon, y0, y1, d0, n);
+    const j = await fetchJSON(`${ARCHIVE}?${new URLSearchParams({
+      latitude: lat.toFixed(4), longitude: lon.toFixed(4), start_date: `${y0}-01-01`, end_date: `${y1}-12-31`,
+      daily: "precipitation_sum,et0_fao_evapotranspiration,temperature_2m_mean", timezone: "America/Chicago", timeformat: "unixtime",
+    })}`, {}, 90000);
+    const D = j.daily;
+    return align("open-meteo", d0, n, D.time.map(t => stampDay(t, j.utc_offset_seconds)),
+      { p: D.precipitation_sum, et0: D.et0_fao_evapotranspiration, tmean: D.temperature_2m_mean }, j.latitude, j.longitude);
+  }
+
+  /* FAO-56 daily grass reference ET0 (Allen et al. 1998, Eqs. 6–21, 37–40) from NASA POWER weather, which has
+     no ET0 of its own. Days missing radiation, dew point or wind use Hargreaves–Samani (Eq. 52) instead. */
+  function fao56(J, phi, z, tx, tn, td, u2, rs) {
+    const es0 = T => 0.6108 * Math.exp((17.27 * T) / (T + 237.3));
+    const dr = 1 + 0.033 * Math.cos(2 * Math.PI * J / 365), dec = 0.409 * Math.sin(2 * Math.PI * J / 365 - 1.39);
+    const ws = Math.acos(Math.max(-1, Math.min(1, -Math.tan(phi) * Math.tan(dec))));
+    const Ra = (24 * 60 / Math.PI) * 0.082 * dr * (ws * Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.sin(ws));
+    const T = (tx + tn) / 2;
+    if (td === null || u2 === null || rs === null) return Math.max(0, 0.0023 * (Ra / 2.45) * (T + 17.8) * Math.sqrt(Math.max(tx - tn, 0)));
+    const delta = (4098 * es0(T)) / (T + 237.3) ** 2;
+    const gamma = 0.000665 * 101.3 * ((293 - 0.0065 * z) / 293) ** 5.26;
+    const es = (es0(tx) + es0(tn)) / 2, ea = Math.min(es0(td), es);
+    const rso = (0.75 + 2e-5 * z) * Ra;
+    const rnl = 4.903e-9 * (((tx + 273.16) ** 4 + (tn + 273.16) ** 4) / 2) * (0.34 - 0.14 * Math.sqrt(ea))
+      * (1.35 * Math.min(1, rso > 0 ? rs / rso : 1) - 0.35);
+    const rn = 0.77 * rs - rnl; // albedo 0.23, soil heat flux G = 0 for daily steps
+    return Math.max(0, (0.408 * delta * rn + gamma * (900 / (T + 273)) * u2 * (es - ea)) / (delta + gamma * (1 + 0.34 * u2)));
   }
 
   async function powerDaily(lat, lon, y0, y1, d0, n) {
-    const q = new URLSearchParams({ parameters: "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN", community: "AG",
+    const q = new URLSearchParams({ parameters: "PRECTOTCORR,T2M,T2M_MAX,T2M_MIN,T2MDEW,WS2M,ALLSKY_SFC_SW_DWN", community: "AG",
       longitude: lon.toFixed(4), latitude: lat.toFixed(4), start: `${y0}0101`, end: `${y1}1231`, format: "JSON" });
-    const P = (await fetchJSON(`${POWER_D}?${q}`, {}, 90000)).properties.parameter;
-    const keys = Object.keys(P.T2M), fill = v => (v === -999 ? null : v);
+    const res = await fetchJSON(`${POWER_D}?${q}`, {}, 90000, 20000);
+    const P = res.properties.parameter, z = (res.geometry && res.geometry.coordinates[2]) || 0;
+    const keys = Object.keys(P.T2M), fill = v => (v === undefined || v === -999 ? null : v);
     const days = keys.map(k => epochDay(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8)));
-    // Hargreaves–Samani ET0 with FAO-56 extraterrestrial radiation (Eq. 21)
     const phi = lat * Math.PI / 180;
     const et0 = keys.map((k, i) => {
-      const tx = fill(P.T2M_MAX[k]), tn = fill(P.T2M_MIN[k]), tm = fill(P.T2M[k]);
-      if (tx === null || tn === null || tm === null) return null;
+      const tx = fill(P.T2M_MAX[k]), tn = fill(P.T2M_MIN[k]);
+      if (tx === null || tn === null) return null;
       const J = days[i] - epochDay(+k.slice(0, 4), 0, 1) + 1;
-      const dr = 1 + 0.033 * Math.cos(2 * Math.PI * J / 365), dec = 0.409 * Math.sin(2 * Math.PI * J / 365 - 1.39);
-      const ws = Math.acos(Math.max(-1, Math.min(1, -Math.tan(phi) * Math.tan(dec))));
-      const Ra = (24 * 60 / Math.PI) * 0.082 * dr * (ws * Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.sin(ws));
-      return Math.max(0, 0.0023 * (Ra / 2.45) * (tm + 17.8) * Math.sqrt(Math.max(tx - tn, 0)));
+      return fao56(J, phi, z, tx, tn, fill(P.T2MDEW[k]), fill(P.WS2M[k]), fill(P.ALLSKY_SFC_SW_DWN[k]));
     });
+    if (et0.filter(v => v !== null).length < n * 0.8) throw new Error("NASA POWER has too few days at this point");
     return align("nasa-power", d0, n, days, { p: keys.map(k => fill(P.PRECTOTCORR[k])), et0, tmean: keys.map(k => fill(P.T2M[k])) }, lat, lon);
   }
 
-  /* Hourly wind from the chosen model (the other one if it fails) plus daily moisture, on one local-day axis. */
-  async function fetchWind(lat, lon, nYears, model = "ecmwf") {
+  /* Hourly wind from the chosen model plus daily moisture, on one local-day axis. If the chosen model errors or
+     has not started answering within 20 s, the other one is used (NASA direct by default, Open-Meteo as backup). */
+  async function fetchWind(lat, lon, nYears, model = "merra2") {
     const { start, end } = yearsFor(nYears);
     const moisture = fetchMoisture(lat, lon, start, end);
     const order = model === "merra2" ? [merraWind, ecmwfWind] : [ecmwfWind, merraWind];
     let w;
     try {
-      w = await order[0](lat, lon, start, end);
+      w = await order[0](lat, lon, start, end, 20000);
     } catch (e) {
       console.warn(`${model} wind unavailable, trying the other model`, e);
       w = await order[1](lat, lon, start, end);
