@@ -70,7 +70,7 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
 ## 3. Wind climatology at the point (Wind tab)
 
 **Data:** for the last 5, 10 or 20 complete years:
-- **Hourly 10 m wind speed and direction.** You choose the gridded model on the Wind tab, and each model is the other's automatic fallback.
+- **Hourly 10 m wind speed and direction.** You choose the gridded model on the Wind tab, and each model is the other's automatic fallback. The app switches from ECMWF to MERRA-2 when Open-Meteo returns an error or has not started answering within 20 s (it normally answers in 1–3 s); once data is arriving, a slow download is allowed up to 90 s.
   - **ECMWF (default):** the Open-Meteo archive `best_match`, which is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. ERA5-Land does not supply wind here. Daily max gust comes with it.
   - **NASA MERRA-2:** the NASA POWER hourly API, UTC, at 0.5° × 0.625°. It has no gust variable.
 - **Daily precipitation, grass reference ET₀ (ASCE Penman–Monteith) and Tmax/Tmin:** gridMET over OPeNDAP, one 4 km cell. Scale factor, offset and fill value are read from the dataset attributes. The fallbacks are Open-Meteo daily precipitation, FAO-56 ET₀ and mean temperature, then NASA POWER daily with Hargreaves ET₀.

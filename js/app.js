@@ -213,7 +213,7 @@
   }
 
   function showResults(items) {
-    if (!items.length) { results.innerHTML = `<button disabled>No matches</button>`; results.hidden = false; return; }
+    if (!items.length) { results.innerHTML = `<button disabled>No matches in Texas</button>`; results.hidden = false; return; }
     results.innerHTML = items.map((r, i) =>
       `<button data-i="${i}" role="option"><b>${esc(r.title)}</b><small>${esc(r.sub)}</small></button>`).join("");
     results.hidden = false;
@@ -239,7 +239,7 @@
     try {
       const rows = await geocode(q);
       if (seq !== searchSeq) return;
-      showResults(rows.map(r => ({
+      showResults(rows.filter(r => inTexas(+r.lat, +r.lon)).map(r => ({
         title: r.name || r.display_name.split(",")[0],
         sub: r.display_name.split(",").slice(1, 4).join(",").trim(),
         lat: +r.lat, lon: +r.lon,
@@ -287,7 +287,7 @@
     b.classList.add("busy");
     navigator.geolocation.getCurrentPosition(p => {
       b.classList.remove("busy");
-      selectSite(p.coords.latitude, p.coords.longitude, { zoom: 15 });
+      selectSite(p.coords.latitude, p.coords.longitude, { zoom: 15, why: "Your location is outside Texas. WindGuard TX covers Texas only." });
     }, err => {
       b.classList.remove("busy");
       U.toast("Couldn't get your location: " + err.message);
@@ -339,10 +339,35 @@
   /* ============ SITE SELECTION ============ */
   let marker = null;
   map.on("click", e => selectSite(e.latlng.lat, e.latlng.lng, { keepZoom: true }));
+  // not-allowed cursor outside the outline, so the limit shows before a click
+  map.on("mousemove", e => map.getContainer().classList.toggle("off-tx", !inTexas(e.latlng.lat, e.latlng.lng)));
+  map.on("mouseout", () => map.getContainer().classList.remove("off-tx"));
+
+  /* Even-odd ray test against the drawn Texas outline (Census 1:5M, mainland and islands). */
+  const TX_POLYS = LAYERS.texas.coordinates.map(poly => {
+    const xs = poly[0].map(c => c[0]), ys = poly[0].map(c => c[1]);
+    return { rings: poly, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] };
+  });
+  function inTexas(lat, lon) {
+    return TX_POLYS.some(({ rings, box }) => {
+      if (lon < box[0] || lon > box[2] || lat < box[1] || lat > box[3]) return false;
+      let inside = false;
+      rings.forEach(r => {
+        for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+          const [xi, yi] = r[i], [xj, yj] = r[j];
+          if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+        }
+      });
+      return inside;
+    });
+  }
 
   function selectSite(lat, lon, opts = {}) {
-    const inTexasish = lat > 25.5 && lat < 36.8 && lon > -106.9 && lon < -93.3;
-    if (!inTexasish) U.toast("This tool is built for Texas — results outside Texas may be incomplete.");
+    if (!inTexas(lat, lon)) {
+      U.toast(opts.why || "WindGuard TX covers Texas only. Pick a point inside the white outline.");
+      if (marker && state.site) marker.setLatLng([state.site.lat, state.site.lon]); // undo a drag across the line
+      return;
+    }
     state.site = { lat, lon };
     state.token++;
     state.soil = null; state.edits = null; state.wind = null; state.windRaw = null; state.windSets = null; state.windStation = null; state.nlcd = null; state.elev = null;

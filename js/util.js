@@ -29,11 +29,14 @@ WG.util = (function () {
   const msToMph = v => v * 2.23694;
   const compass = deg => COMPASS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
 
-  async function fetchJSON(url, opts = {}, timeoutMs = 45000) {
+  /* headerMs caps the wait for the server to start answering; timeoutMs caps the whole download. */
+  async function fetchJSON(url, opts = {}, timeoutMs = 45000, headerMs = timeoutMs) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const hdrTimer = setTimeout(() => ctrl.abort(), headerMs);
     try {
       const r = await fetch(url, { ...opts, signal: ctrl.signal });
+      clearTimeout(hdrTimer);
       if (!r.ok) {
         let msg = r.status + " " + r.statusText;
         try { const j = await r.json(); msg = j.reason || j.message || msg; } catch (e) { /* not json */ }
@@ -42,6 +45,7 @@ WG.util = (function () {
       return await r.json();
     } finally {
       clearTimeout(timer);
+      clearTimeout(hdrTimer);
     }
   }
 

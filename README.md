@@ -2,7 +2,7 @@
 
 Mobile-friendly web app that shows where Texas is most prone to wind erosion and builds a site-specific control plan for any point you pick.
 
-Tap the map, search a place, use GPS, or type coordinates. The app then pulls the soil survey, 10 years of hourly wind and the land cover for that point. It shows the risk, the wind-prone months, the full soil profile, and practices matched to the land use you choose.
+Tap the map, search a place, use GPS, or type coordinates. Points outside the Texas outline are refused, and search lists Texas places only. The app then pulls the soil survey, 10 years of hourly wind and the land cover for that point. It shows the risk, the wind-prone months, the full soil profile, and practices matched to the land use you choose.
 
 ## Run it
 
@@ -29,7 +29,7 @@ To put it on a phone, host the folder on any static host (GitHub Pages, Netlify,
 
 ## Data sources (all open, no keys)
 
-The app reads each dataset from the agency that produces it wherever a browser can do that. The one exception is ECMWF wind: ECMWF and the Copernicus CDS need a personal key and queued jobs, so the app reads Open-Meteo's copy unless you pick NASA MERRA-2.
+The app reads each dataset from the agency that produces it wherever a browser can do that. The one exception is ECMWF wind: ECMWF and the Copernicus CDS need a personal key and queued jobs, so the app reads Open-Meteo's copy unless you pick NASA MERRA-2. If Open-Meteo errors or has not answered within 20 s, it switches to MERRA-2.
 
 | Data | Producer | How the app reads it | If it fails |
 |---|---|---|---|

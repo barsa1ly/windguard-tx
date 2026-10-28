@@ -277,6 +277,7 @@ svg { display: block; }
   border: 3px solid #fff; box-shadow: 0 4px 10px rgba(0, 0, 0, .35);
 }
 .pin::after { content: ""; position: absolute; inset: 7px; background: #fff; border-radius: 50%; }
+body:not(.leaflet-dragging) .leaflet-container.off-tx { cursor: not-allowed; } /* outside the Texas outline */
 .county-tip { font-size: 12px; }
 
 /* ---------- panel ---------- */

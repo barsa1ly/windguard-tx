@@ -224,8 +224,8 @@ def main():
     lon1, lat1 = to_ll.transform(maxx, maxy)
     bounds = [[round(lat0, 6), round(lon0, 6)], [round(lat1, 6), round(lon1, 6)]]
 
-    # simplified Texas outline for drawing
-    tx_s = tx.simplify(0.01, preserve_topology=True)
+    # Texas outline for drawing and for the app's inside-Texas click test (<= ~0.2 km from the 1:5M source)
+    tx_s = tx.simplify(0.002, preserve_topology=True)
 
     stats = {
         "E_pct_by_class": [round(float(((np.digitize(E, sus_breaks) == k) & wei_ok).sum() / wei_ok.sum() * 100), 1)

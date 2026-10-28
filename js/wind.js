@@ -32,7 +32,7 @@ WG.wind = (function () {
       latitude: lat.toFixed(4), longitude: lon.toFixed(4), start_date: `${a}-01-01`, end_date: `${b}-12-31`,
       hourly: "wind_speed_10m,wind_direction_10m", daily: "wind_gusts_10m_max",
       wind_speed_unit: "ms", timezone: "America/Chicago", timeformat: "unixtime",
-    })}`, {}, 90000)));
+    })}`, {}, 90000, 20000))); // no answer within 20 s → fetchWind switches to MERRA-2; a slow download is still allowed to finish
     const cat = (k, sect) => parts.flatMap(p => p[sect][k]);
     const off = parts[0].utc_offset_seconds, dt = cat("time", "daily"), g = cat("wind_gusts_10m_max", "daily");
     return {

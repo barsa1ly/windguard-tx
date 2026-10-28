@@ -8,8 +8,8 @@ WG.methods = (function () {
   /* [data, producer, how the app reads it, resolution · period, if it fails] */
   const SOURCES = [
     ["Hourly 10 m wind speed and direction (default)", "ECMWF: IFS operational analysis; ERA5 reanalysis by Copernicus C3S",
-      `${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} archive, a re-hosted copy. ECMWF and the Copernicus CDS have no point API a web page can call: they need a personal key and queued jobs that take minutes.`,
-      "9 km hourly (2017 on); 0.25° (~28 km) hourly (before 2017)", "NASA MERRA-2"],
+      `${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} archive, a re-hosted copy (about 1–3 s for 10–20 years). Copernicus's own data store needs each user's personal key and a queued job that takes minutes.`,
+      "9 km hourly (2017 on); 0.25° (~28 km) hourly (before 2017)", "NASA MERRA-2, if Open-Meteo errors or has not answered within 20 s"],
     ["Hourly 10 m wind speed and direction (alternative)", "NASA GMAO MERRA-2 reanalysis",
       `<b>Direct:</b> ${A("https://power.larc.nasa.gov/docs/services/api/temporal/hourly/", "NASA POWER")} hourly API`, "0.5° × 0.625° (~50 km) hourly, 2001 on", "ECMWF via Open-Meteo"],
     ["Daily maximum gust (model)", "ECMWF IFS / ERA5", "Open-Meteo, with the hourly wind", "as above",
@@ -133,7 +133,7 @@ WG.methods = (function () {
 
   function render() {
     $("#methodsBody").innerHTML = `
-      <p class="fine">“Direct” means the app downloads from the agency that produces the data. The default ECMWF wind is the exception: ECMWF and Copernicus offer no point service a web page can call without a personal key and a queued job, so the app reads Open-Meteo's copy of the same fields. Pick <b>NASA MERRA-2 (direct)</b> under Model on the Wind tab for a fully direct path; at Lubbock its hourly correlation with the airport is 0.71 against 0.80 for ECMWF, and calibration removes most of the difference in monthly totals.</p>
+      <p class="fine">“Direct” means the app downloads from the agency that produces the data. The default ECMWF wind is the exception: Copernicus's data store needs each user's personal key and a queued job that takes minutes, so the app reads Open-Meteo's copy of the same fields, which arrives in seconds. If Open-Meteo errors or has not answered within 20 s, the app switches to NASA MERRA-2. Pick <b>NASA MERRA-2 (direct)</b> under Model on the Wind tab for a fully direct path; at Lubbock its hourly correlation with the airport is 0.71 against 0.80 for ECMWF, and calibration removes most of the difference in monthly totals.</p>
       <section id="m-site"><h4>This location</h4>${siteHTML()}</section>
       <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}</section>
       <section id="m-erod"><h4>Erodibility equations</h4>${table(EQ_COLS, eqRows(EROD), "eqs")}</section>
