@@ -244,6 +244,7 @@ svg { display: block; }
 }
 .hint strong { font-size: 15px; color: #fff; }
 .app.has-site .hint { display: none; }
+body.area-open .hint { display: none; }
 
 .map-toggle {
   position: absolute;
@@ -670,4 +671,36 @@ table.grid td.l { text-align: left; }
 }
 @media (max-width: 767px) and (max-height: 700px) {
   .app.has-site #methodsBtn { display: none; }
+}
+
+/* field or area analysis: a non-modal panel so the map stays usable */
+.sheet.area { left: 12px; right: auto; top: 68px; width: min(420px, calc(100% - 24px)); max-height: calc(100% - 80px); }
+.area-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 6px; }
+.btn.ghost { background: transparent; }
+.area-status { padding: 10px 0; }
+.area-sum { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 12px; font-size: 14px; }
+.area-sum span { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.area-kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 2px; }
+.area-kpi > div { background: var(--surface-2); border-radius: 10px; padding: 8px 10px; display: grid; gap: 1px; }
+.area-kpi small { color: var(--muted); font-size: 11px; }
+.area-kpi b { font-size: 17px; }
+.area-kpi span { font-size: 12px; color: var(--ink-2); }
+.abars { display: grid; gap: 5px; }
+.abar { display: grid; grid-template-columns: 12px minmax(0, 1.5fr) minmax(0, 1fr) 46px 58px; align-items: center; gap: 6px; font-size: 12px; }
+.abar .sw { width: 12px; height: 12px; border-radius: 3px; }
+.abar .al { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.abar .al small { color: var(--muted); }
+.abar .track { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.abar .track i { display: block; height: 100%; border-radius: 4px; }
+.abar .av { text-align: right; font-weight: 600; }
+.abar .aa { text-align: right; color: var(--muted); }
+.mtable.area-mu td:first-child { min-width: 0; }
+.draw-bar { position: fixed; z-index: 2100; left: 50%; top: 68px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 8px 10px; font-size: 13px; max-width: calc(100% - 24px); flex-wrap: wrap; }
+.leaflet-container.drawing { cursor: crosshair; }
+.leaflet-container.checking { cursor: progress; }
+@media (max-width: 767px) {
+  .sheet.area { top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 55%; border-radius: 16px 16px 0 0; }
+  .abar { grid-template-columns: 12px minmax(0, 1.3fr) minmax(0, 1fr) 44px 52px; font-size: 11.5px; }
+  .draw-bar { top: auto; bottom: 16px; }
 }

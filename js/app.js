@@ -338,7 +338,7 @@
 
   /* ============ SITE SELECTION ============ */
   let marker = null;
-  map.on("click", e => selectSite(e.latlng.lat, e.latlng.lng, { keepZoom: true }));
+  map.on("click", e => { if (!(WG.area && WG.area.drawing())) pickSite(e.latlng.lat, e.latlng.lng, { keepZoom: true }); });
   // not-allowed cursor outside the outline, so the limit shows before a click
   map.on("mousemove", e => map.getContainer().classList.toggle("off-tx", !inTexas(e.latlng.lat, e.latlng.lng)));
   map.on("mouseout", () => map.getContainer().classList.remove("off-tx"));
@@ -362,6 +362,23 @@
     });
   }
 
+  WG.inTexas = inTexas;
+
+  /* Map clicks and pin drags: refuse points on a building, road or water body (area.js asks USA Structures, Census
+     TIGER and USGS NHD; if they are slow the point is accepted). */
+  let pickSeq = 0;
+  async function pickSite(lat, lon, opts) {
+    if (!inTexas(lat, lon) || !WG.area) return selectSite(lat, lon, opts);
+    const my = ++pickSeq, el = map.getContainer();
+    el.classList.add("checking");
+    const hit = await WG.area.excludedAt(lat, lon);
+    if (my !== pickSeq) return;
+    el.classList.remove("checking");
+    if (!hit) return selectSite(lat, lon, opts);
+    U.toast(`That spot is ${hit.label} according to ${hit.src}. Pick a point on open land.`, 4500);
+    if (marker && state.site) marker.setLatLng([state.site.lat, state.site.lon]);
+  }
+
   function selectSite(lat, lon, opts = {}) {
     if (!inTexas(lat, lon)) {
       U.toast(opts.why || "WindGuard TX covers Texas only. Pick a point inside the white outline.");
@@ -376,7 +393,7 @@
     const ll = L.latLng(lat, lon);
     if (!marker) {
       marker = L.marker(ll, { draggable: true, icon: L.divIcon({ className: "", html: '<div class="pin"></div>', iconSize: [30, 30], iconAnchor: [15, 30] }) }).addTo(map);
-      marker.on("dragend", () => { const p = marker.getLatLng(); selectSite(p.lat, p.lng, { keepZoom: true }); });
+      marker.on("dragend", () => { const p = marker.getLatLng(); pickSite(p.lat, p.lng, { keepZoom: true }); });
     } else marker.setLatLng(ll);
 
     const wasOpen = app.classList.contains("has-site") && !app.classList.contains("map-big");

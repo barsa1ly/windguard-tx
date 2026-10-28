@@ -143,7 +143,25 @@ Airport anemometers sit on open, mown ground, so calibrated values describe expo
 
 **Slope and aspect** come from USGS 3DEP (1–10 m lidar/DEM) through the Elevation Point Query Service: elevation at 5 points about 100 m apart. slope = 100·√(gx² + gy²), aspect = atan2(−gx, −gy). Fallback: Copernicus 90 m DEM via Open-Meteo.
 
-## 5. Recommendations (Practices tab)
+## 5. Field or area analysis (area tool) and the map-click check
+
+**Boundary:** drawn on the map (tap the corners; tap the first corner, double-click or Finish to close) or uploaded. Zipped shapefiles and loose .shp/.dbf/.prj files are read with shpjs, which reprojects using the .prj; KML and KMZ with togeojson (and JSZip for KMZ); GeoJSON directly. Everything is read in the browser. Every polygon in the file counts; lines and points are ignored. Limit 500 km² (123,550 ac). Area is the spherical polygon area (WGS84 radius).
+
+**Soil polygons:** one Soil Data Access query clips the SSURGO map-unit polygons to the boundary (`mupolygongeo.STIntersection(boundary)`, with the boundary simplified to at most 600 vertices). Two more queries read each map unit's components (WEG, I, %) and its climatic-factor area (C).
+
+**Left out** (when "Leave out buildings, roads and water" is ticked):
+- **Buildings:** FEMA/ORNL USA Structures footprints.
+- **Roads:** Census TIGER primary, secondary and local roads, as a band around the centreline. Half-widths by MTFCC class: S1100 15 m, S1200 9 m, S1400 5 m, S1630 6 m, S1640 4 m, S1730/S1740/S1750 3 m, S1500 2 m, paths 1.5 m, others 4 m.
+- **Water:** USGS NHD water bodies of type lake/pond (390), reservoir (436), swamp/marsh (466) and estuary (493). Playas (361) stay in because most are farmed. Esri's copy of NHD is asked at the same time and used if NHD has not answered within 5 s. SSURGO map units named "Water" are always left out.
+- Points outside the Texas outline or without soil data.
+
+**Shares:** about 20,000 stratified random points (one per grid cell, seeded so the same area gives the same answer) are tested against the boundary, the left-out features and the soil polygons. Each kept point adds each component's percentage (÷ 100) to that component's WEG and to its risk class, with E = I × C / 100 using the map unit's C. Shares are of the open land in rated components; components without a WEG (rock outcrop, urban land, pits) are reported separately. Acres = share × analysed acres. The sampling error of a 20,000-point share is under ±0.7 percentage points.
+
+**Checks:** a 157 ac field uploaded as GeoJSON, KML, KMZ, a zipped WGS84 shapefile, a zipped UTM 14N shapefile and loose UTM .shp/.dbf/.prj files gave 158 ac every time. A 2 km square on the edge of Shallowater: 826 ac, 77 ac of roads and 76 ac of buildings left out, 66% WEG 6. A 100 km² square in south Lubbock took 6 s.
+
+**Map-click check:** before a clicked point (or a dragged pin) is analysed, the same three layers are read for a ~180 m box around it. If the point falls inside a building or water body, or within a road's half-width, it is refused with the reason. Typed coordinates, GPS and place search are not checked. If the services don't answer within 3.5 s the point is accepted.
+
+## 6. Recommendations (Practices tab)
 
 The rules are encoded in `js/practices.js` from `docs/RESEARCH.md`. Key thresholds:
 

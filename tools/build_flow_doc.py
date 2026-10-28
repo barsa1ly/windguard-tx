@@ -147,11 +147,12 @@ def fig_overview():
     # top row: the point and the Texas check
     U = s.box(SX, 10.62, SW, 0.9, "user", "You pick a point",
               ["map tap · place search (OpenStreetMap)", "GPS · typed latitude, longitude"])
-    L = s.box(EX, 10.62, EW, 0.9, "calc", "Location check", ["inside the Texas outline?"], module="app.js · inTexas")
+    L = s.box(EX, 10.62, EW, 0.98, "calc", "Location check", ["inside Texas; not on a building,", "road or water?"],
+              module="app.js · inTexas, pickSite")
     M = s.box(RX, 10.62, RW, 0.9, "warn", "Refused", ["“covers Texas only” message;", "nothing is downloaded"])
     s.path([(U.right, U.cy), (L.x, U.cy)])
     s.path([(L.right, L.cy), (M.x, L.cy)], color=PAL["warn"][1], dashed=True)
-    s.label((L.right + M.x) / 2, L.cy + 0.05, "no: outside Texas", color=PAL["warn"][1])
+    s.label((L.right + M.x) / 2, L.cy + 0.05, "no: outside Texas, or on a building, road or water", color=PAL["warn"][1])
 
     bus_y, chan_y, top0, pitch, bh = 9.5, 9.3, 9.13, 1.04, 0.9
     bx = EX + 0.7
@@ -391,6 +392,56 @@ def fig_soil():
 
 
 # --------------------------------------------------------------------------------------------
+# Figure 4: field or area analysis
+# --------------------------------------------------------------------------------------------
+def fig_area():
+    W, H = 8.6, 9.1
+    s = Sheet(W, H)
+    kw = dict(fs=10, tfs=11, lh=0.2)
+    D1 = s.box(0.1, 9.0, 4.1, 0.62, "user", "Draw on the map", ["tap the corners; tap the first one to close"], **kw)
+    D2 = s.box(4.4, 9.0, 4.1, 0.62, "user", "Upload a boundary file", [".zip shapefile, .shp + .dbf + .prj, .kml, .kmz, .geojson"], **kw)
+    B = s.box(0.1, 7.95, 8.4, 0.85, "calc", "Boundary polygon",
+              ["read in the browser (shpjs reprojects with the .prj; togeojson, JSZip) · up to 500 km² · acres from the polygon"],
+              module="area.js · analyse", **kw)
+    for d in (D1, D2):
+        s.path([(d.cx, d.y), (d.cx, B.top)])
+    bw, gap, top = 2.0, (8.4 - 4 * 2.0) / 3, 6.25
+    srcs = [("soil", "SSURGO soil polygons", ["Soil Data Access clips", "map units to the boundary", "+ components, C"]),
+            ("soil", "USA Structures", ["FEMA / ORNL", "building footprints"]),
+            ("soil", "Census TIGER roads", ["centrelines widened", "by road class (MTFCC)"]),
+            ("soil", "USGS NHD water", ["lakes, reservoirs, marshes", "Esri copy if NHD is slow", "+ SSURGO Water units"])]
+    S = []
+    bus = B.y - 0.25
+    s.path([(B.cx, B.y), (B.cx, bus)], head=False)
+    s.path([(0.1 + bw / 2, bus), (0.1 + 3 * (bw + gap) + bw / 2, bus)], head=False)
+    for i, (kind, t, lines) in enumerate(srcs):
+        x = 0.1 + i * (bw + gap)
+        b = s.box(x, top, bw, 1.02, kind, t, lines, **kw)
+        s.path([(b.cx, bus), (b.cx, b.top)])
+        S.append(b)
+    s.label(B.cx + 0.08, (B.y + bus) / 2, "all four at once", ha="left", va="center", fs=8.5)
+    P = s.box(0.1, 4.55, 8.4, 1.2, "calc", "Sample the area",
+              ["about 20,000 stratified random points inside the boundary (seeded: same area, same answer)",
+               "left out: points on a building, within a road's half-width, in water, outside Texas, without soil",
+               "each kept point is split among its map unit's components by their percentages"], module="area.js", **kw)
+    for b in S:
+        s.path([(b.cx, b.y), (b.cx, P.top)])
+    Q = s.box(0.1, 2.9, 8.4, 0.85, "comb", "Shares and means",
+              ["share and acres in each Wind Erodibility Group and risk class, E = I × C / 100 (C per map unit)",
+               "area-weighted mean I and E · map units by share · components without a WEG reported apart"], **kw)
+    s.path([(P.cx, P.y), (P.cx, Q.top)])
+    ow, og = 2.7, (8.4 - 3 * 2.7) / 2
+    for i, (t, lines) in enumerate([("Area panel", ["acres, bars, map-unit table"]), ("Map", ["soils by WEG, left-out features"]),
+                                    ("CSV file", ["shares, acres, map units"])]):
+        x = 0.1 + i * (ow + og)
+        b = s.box(x, 1.45, ow, 0.68, "out", t, lines, lw=2, **kw)
+        s.path([(b.cx, Q.y), (b.cx, b.top)])
+    s.text(0.1, 0.45, "Map clicks use the same three layers: a point inside a building or water body, or within a road's\n"
+           "half-width, is refused before anything is downloaded.", fs=9.5, color=MUTED, va="center", limit=W - 0.05)
+    return s.save("flow_area.png")
+
+
+# --------------------------------------------------------------------------------------------
 # The Word document
 # --------------------------------------------------------------------------------------------
 SOURCES = [
@@ -411,6 +462,16 @@ SOURCES = [
      "station, hourly", "Iowa Environmental Mesonet ASOS copy; then the next station"),
     ("Airport station list", "NOAA ISD history + GHCNh station list", "built into the app (data/stations.js)",
      "417 Texas-area stations", "—"),
+    ("Soil polygons inside a drawn or uploaded area", "USDA-NRCS SSURGO", "Soil Data Access spatial query, clipped to "
+     "the boundary (direct)", "map units, 1:12,000–1:24,000", "—"),
+    ("Building footprints (area tool, map clicks)", "FEMA / ORNL USA Structures", "ArcGIS feature service (direct)",
+     "footprint polygons", "not removed; the panel says so"),
+    ("Roads (area tool, map clicks)", "U.S. Census Bureau TIGER/Line", "TIGERweb map service (direct); widened by road class",
+     "road centrelines", "not removed; the panel says so"),
+    ("Water bodies (area tool, map clicks)", "USGS NHD (lakes, reservoirs, marshes; playas stay in) + SSURGO Water units",
+     "NHD map service (direct)", "1:24,000 polygons", "Esri's copy of NHD after 5 s (3 s for a click)"),
+    ("Boundary files", "your shapefile, KML/KMZ or GeoJSON", "read in the browser with shpjs, togeojson, JSZip",
+     "as drawn", "—"),
     ("Place search", "OpenStreetMap Nominatim", "search API; results outside Texas are dropped", "—", "type coordinates instead"),
     ("Statewide map layers", "SSURGO WEG/I (UC Davis SoilWeb), NRCS C, NASA POWER wind; built offline",
      "built into the app (data/layers.js and PNG overlays)", "statewide grid", "display only"),
@@ -473,6 +534,21 @@ SOIL_CALC = [
      "all horizons → .SOL file", "soil.js · `toSOL`"),
 ]
 
+AREA_CALC = [
+    ("Read the boundary", "drawn corners, or a file: shpjs (reprojects with the .prj), togeojson (KML), JSZip (KMZ), GeoJSON; "
+     "all polygons kept, limit 500 km²", "file → polygons, acres", "area.js · `parseFiles`, `polysArea`"),
+    ("Clip the soils", "`mupolygongeo.STIntersection(boundary)` on Soil Data Access (boundary simplified to ≤ 600 vertices); "
+     "components with WEG, I, %; climatic factor C per map unit", "boundary → soil polygons", "area.js · `soils`"),
+    ("Left-out features", "USA Structures footprints; TIGER roads as bands (S1100 15 m, S1200 9 m, S1400 5 m … half-widths); "
+     "NHD lakes, reservoirs, marshes, estuaries; SSURGO Water units", "boundary box → features", "area.js · `exclusions`"),
+    ("Sample", "≈ 20,000 stratified random points (one per grid cell, seeded) inside the boundary; drop left-out, "
+     "outside-Texas and no-soil points", "points → kept points", "area.js · `samples`, `hitAt`"),
+    ("Shares", "share = Σ points Σ components (pct/100)·[class] ÷ Σ points Σ components (pct/100); E = I × C / 100; "
+     "± 0.7 points at 95 %", "kept points → % and acres", "area.js · `analyse`"),
+    ("Map-click check", "same layers in a ~180 m box; inside a building or water, or within a road half-width → refused; "
+     "accepted if the services take > 3.5 s", "click → accept or refuse", "area.js · `excludedAt`; app.js · `pickSite`"),
+]
+
 RESULTS = [
     ("Risk class and E (Overview)", "E = I × C / 100", "SSURGO: WEG → I, climatic factor C"),
     ("Erodibility index EI", "E / T", "SSURGO soil-loss tolerance T"),
@@ -485,6 +561,8 @@ RESULTS = [
     ("Moisture chart", "monthly sums", "gridMET (or its fallbacks)"),
     ("Airport vs model card", "same-hour comparison", "NOAA GHCNh and the model at the station's cell"),
     ("Practice plan", "rule tables in practices.js", "land use and answers, MLRA region, WEG, risk, windy months"),
+    ("Area panel: WEG and risk-class shares, mean I and E", "sampled shares, components weighted by %",
+     "SSURGO polygons and components; USA Structures, TIGER and NHD left out"),
     ("Statewide map colours", "pre-computed offline", "SSURGO WEG/I (UC Davis SoilWeb rasters), NRCS C, NASA POWER monthly wind"),
 ]
 
@@ -496,6 +574,8 @@ CODE = [
     ("js/app.js", "map, Texas check, loading sequence, risk model, elevation and land cover, rendering of every tab"),
     ("js/charts.js", "Chart.js charts"),
     ("js/practices.js", "practice planner: questions, rules, specifications, species tables"),
+    ("js/area.js", "field or area analysis: drawing, boundary files, clipped soils, left-out features, sampling, panel, CSV; "
+     "map-click check"),
     ("js/methods.js", "Methods sheet: sources used at the point, source catalog, equations"),
     ("data/stations.js", "built-in airport list (made by tools/fetch_stations.py)"),
     ("data/layers.js, data/*.png", "statewide layers and the Texas outline (made by tools/build_layers.py)"),
@@ -504,7 +584,9 @@ CODE = [
 
 STEPS = [
     ("Location check.", " The point is tested against the Texas outline drawn on the map (U.S. Census 1:5,000,000 state "
-     "boundary). Outside it, the app shows a message and downloads nothing. Place search lists only places inside Texas."),
+     "boundary). A map click or pin drag is also checked against building footprints (USA Structures), roads (Census "
+     "TIGER) and water bodies (USGS NHD). If it fails, the app says why and downloads nothing. Place search lists only "
+     "places inside Texas."),
     ("Soil.", " Soil Data Access finds the SSURGO map unit under the point, then runs 8 queries at once. The soil engine "
      "derives texture, WEG, I and water properties, and the risk card can show E as soon as the soil arrives."),
     ("Elevation and land cover, at the same time.", " Five USGS 3DEP elevations give slope and aspect (15 s limit, then "
@@ -540,6 +622,9 @@ LIMITS = [
      "nearby ASOS sites."),
     ("RWEQ values are cross-checks.", " EF and SCF are not used in the risk; they get an asterisk when the soil is "
      "outside the range the equations were fitted on."),
+    ("Area results are estimates.", " Shares come from about 20,000 sample points (± 0.7 percentage points at 95 %) and "
+     "from SSURGO components, which are not mapped separately inside a map unit. Buildings, roads and water are only as "
+     "complete as USA Structures, TIGER and NHD; if one of them does not answer, the panel says it was not removed."),
     ("Statewide layers are fixed.", " The map colours are pre-computed and do not change with the point you pick."),
     ("No WindGuard server.", " GitHub Pages only delivers the files. Your browser sends the point's coordinates (and any "
      "place name you search for) straight to each service listed above; nothing is stored."),
@@ -748,7 +833,14 @@ def build_docx(figs, commit):
          "result boxes. Your edits replace the surveyed surface layer, so every value below them is recalculated.")
     figure(figs[2], 6.2, "Figure 3. Soil and erosion-risk pipeline.")
 
-    h = doc.add_heading("7. Calculations, step by step", level=1)
+    h = doc.add_heading("7. Field or area analysis", level=1)
+    h.paragraph_format.page_break_before, h.paragraph_format.space_before = True, Pt(0)
+    para("The area tool (polygon button on the map) works on a whole field or ranch instead of one point. Four sources "
+         "are read at once for the boundary; sample points then give the share of the open land in each Wind "
+         "Erodibility Group and risk class.")
+    figure(figs[3], 5.9, "Figure 4. Field or area analysis, and the map-click check.")
+
+    h = doc.add_heading("8. Calculations, step by step", level=1)
     h.paragraph_format.page_break_before, h.paragraph_format.space_before = True, Pt(0)
     para("“Where” names the file and function in the app's code, so each step can be checked against the source. "
          "The same equations, with their terms and references, are in the app's Methods sheet and in docs/METHODS.md.")
@@ -756,18 +848,20 @@ def build_docx(figs, commit):
     table(["Step", "Rule or equation", "Inputs → output", "Where"], WIND_CALC, [1.35, 3.0, 1.55, 1.1])
     doc.add_heading("Soil and erosion risk (Figure 3)", level=2)
     table(["Step", "Rule or equation", "Inputs → output", "Where"], SOIL_CALC, [1.35, 3.0, 1.55, 1.1])
+    doc.add_heading("Field or area analysis (Figure 4)", level=2)
+    table(["Step", "Rule or equation", "Inputs → output", "Where"], AREA_CALC, [1.35, 3.0, 1.55, 1.1])
 
-    doc.add_heading("8. Data sources", level=1)
+    doc.add_heading("9. Data sources", level=1)
     table(["Data", "Producer", "How the app reads it", "Resolution", "If it fails"], SOURCES, [1.6, 1.45, 1.45, 1.2, 1.3],
           size=8.5)
 
-    doc.add_heading("9. Where each number on screen comes from", level=1)
+    doc.add_heading("10. Where each number on screen comes from", level=1)
     table(["Result on screen", "Calculation", "Data behind it"], RESULTS, [2.0, 2.2, 2.8])
 
-    doc.add_heading("10. Fallbacks, limits and checks", level=1)
+    doc.add_heading("11. Fallbacks, limits and checks", level=1)
     lead_list(LIMITS, "List Bullet")
 
-    doc.add_heading("11. Code map", level=1)
+    doc.add_heading("12. Code map", level=1)
     end = table(["File", "What it does"], CODE, [1.9, 5.1])
     end.paragraph_format.space_after = Pt(0)  # Word needs a paragraph after the last table; keep it 1 pt tall
     mark = OxmlElement("w:rPr")
@@ -791,4 +885,4 @@ if __name__ == "__main__":
 
     commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
                             text=True).stdout.strip() or "unknown"
-    build_docx([fig_overview(), fig_wind(), fig_soil()], commit)
+    build_docx([fig_overview(), fig_wind(), fig_soil(), fig_area()], commit)

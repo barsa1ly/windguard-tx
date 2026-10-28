@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=14">
+  <link rel="stylesheet" href="css/app.css?v=15">
 </head>
 <body>
 <div id="app" class="app">
@@ -48,6 +48,9 @@
       </button>
       <button id="locateBtn" class="tool-btn" title="Use my location" aria-label="Use my location">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <button id="areaBtn" class="tool-btn" title="Analyse a field or area" aria-label="Analyse a field or area">
+        <svg viewBox="0 0 24 24"><path d="M5 7.5 11 4l8.5 4-1.5 10L6.5 19.5Z"/><circle cx="5" cy="7.5" r="1.6"/><circle cx="11" cy="4" r="1.6"/><circle cx="19.5" cy="8" r="1.6"/><circle cx="18" cy="18" r="1.6"/><circle cx="6.5" cy="19.5" r="1.6"/></svg>
       </button>
       <button id="methodsBtn" class="tool-btn" title="Methods, equations and data sources" aria-label="Methods, equations and data sources">
         <svg viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8.5 12h7M8.5 15.5h7M8.5 8.5h3"/></svg>
@@ -301,19 +304,42 @@
     <div class="sheet-body" id="methodsBody"></div>
   </div>
 
+  <!-- ============ AREA ANALYSIS (non-modal: the map stays usable) ============ -->
+  <div id="areaSheet" class="sheet area" role="dialog" aria-label="Field or area analysis" hidden>
+    <div class="sheet-h"><h3>Field or area analysis</h3><button class="icon-btn" id="areaClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="sheet-body">
+      <p class="fine">Draw a boundary on the map or upload one: a zipped shapefile, .shp with .dbf and .prj, .kml, .kmz or .geojson (up to 500 km²). The app shows how much of the area falls in each Wind Erodibility Group and erosion-risk class.</p>
+      <div class="area-actions">
+        <button class="btn primary" id="areaDraw">Draw on map</button>
+        <button class="btn" id="areaUpload">Upload boundary</button>
+        <input type="file" id="areaFile" accept=".zip,.shp,.dbf,.prj,.shx,.cpg,.kml,.kmz,.geojson,.json" multiple hidden>
+      </div>
+      <label class="toggle"><input type="checkbox" id="areaExclude" checked><span>Leave out buildings, roads and water<small>USA Structures, Census TIGER, USGS NHD</small></span></label>
+      <label class="toggle"><input type="checkbox" id="areaSoils" checked><span>Show soil map units on the map<small>coloured by Wind Erodibility Group</small></span></label>
+      <div id="areaResults"></div>
+    </div>
+  </div>
+  <div id="drawBar" class="draw-bar" hidden>
+    <span id="drawMsg">Tap the map to add corners</span>
+    <button class="btn small" id="drawUndo">Undo</button>
+    <button class="btn small primary" id="drawFinish">Finish</button>
+    <button class="btn small" id="drawCancel">Cancel</button>
+  </div>
+
   <div id="toast" class="toast" role="status" hidden></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=14"></script>
-<script src="data/stations.js?v=14"></script>
-<script src="js/util.js?v=14"></script>
-<script src="js/soil.js?v=14"></script>
-<script src="js/wind.js?v=14"></script>
-<script src="js/charts.js?v=14"></script>
-<script src="js/practices.js?v=14"></script>
-<script src="js/methods.js?v=14"></script>
-<script src="js/app.js?v=14"></script>
+<script src="data/layers.js?v=15"></script>
+<script src="data/stations.js?v=15"></script>
+<script src="js/util.js?v=15"></script>
+<script src="js/soil.js?v=15"></script>
+<script src="js/wind.js?v=15"></script>
+<script src="js/charts.js?v=15"></script>
+<script src="js/practices.js?v=15"></script>
+<script src="js/methods.js?v=15"></script>
+<script src="js/app.js?v=15"></script>
+<script src="js/area.js?v=15"></script>
 </body>
 </html>
