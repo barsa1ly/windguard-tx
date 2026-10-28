@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1f2a24">
+  <title>WindGuard TX</title>
+  <meta name="description" content="Wind erosion risk and control practices for any location in Texas, from SSURGO soils and historical wind data.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b4532a'/%3E%3Cpath d='M6 12h13a3 3 0 1 0-3-3M6 17h18a3 3 0 1 1-3 3M6 22h9' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="css/app.css?v=6">
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- ============ MAP ============ -->
+  <section class="map-pane" aria-label="Map">
+    <div id="map"></div>
+
+    <div class="topbar">
+      <div class="brand" title="WindGuard TX">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor"/><path d="M6 12h13a3 3 0 1 0-3-3M6 17h18a3 3 0 1 1-3 3M6 22h9" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>
+        <span>WindGuard <b>TX</b></span>
+      </div>
+      <form id="searchForm" class="search" autocomplete="off" role="search">
+        <svg class="search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="searchInput" type="search" inputmode="search" placeholder="Place, address, or lat, lon" aria-label="Search a place or enter coordinates">
+        <button type="button" id="coordBtn" class="icon-btn" title="Enter coordinates" aria-label="Enter coordinates">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+        </button>
+        <div id="searchResults" class="search-results" role="listbox" hidden></div>
+        <div id="coordForm" class="coord-form" hidden>
+          <label>Latitude<input id="latInput" type="text" inputmode="decimal" placeholder="32.7357"></label>
+          <label>Longitude<input id="lonInput" type="text" inputmode="decimal" placeholder="-101.9550"></label>
+          <button type="button" id="coordGo" class="btn primary">Go</button>
+          <p class="fine">Decimal degrees (west is negative) or DMS, e.g. 32°44′9″N 101°57′18″W</p>
+        </div>
+      </form>
+    </div>
+
+    <div class="map-tools">
+      <button id="layersBtn" class="tool-btn" title="Map layers" aria-label="Map layers">
+        <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/><path d="m3 17.5 9 5 9-5" opacity=".5"/></svg>
+      </button>
+      <button id="locateBtn" class="tool-btn" title="Use my location" aria-label="Use my location">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+    </div>
+
+    <div id="legend" class="legend" hidden></div>
+
+    <div id="hint" class="hint">
+      <strong>Tap anywhere in Texas</strong>
+      <span>to see wind-erosion risk, seasonal wind, soil profile and control practices. Shaded colors show statewide bare-soil susceptibility.</span>
+    </div>
+
+    <button id="mapToggle" class="map-toggle" hidden>
+      <svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg><span>Show results</span>
+    </button>
+  </section>
+
+  <!-- ============ RESULTS PANEL ============ -->
+  <aside id="panel" class="panel" aria-label="Location analysis">
+    <div class="panel-grip" id="panelGrip" aria-hidden="true"><i></i></div>
+    <header class="panel-head">
+      <div class="site">
+        <div class="site-name" id="siteName">Selected location</div>
+        <div class="site-sub"><span id="siteCoords">—</span><span id="siteElev"></span></div>
+      </div>
+      <div class="head-actions">
+        <button id="expandMapBtn" class="icon-btn" title="Bigger map" aria-label="Bigger map">
+          <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+        <button id="closePanelBtn" class="icon-btn" title="Close" aria-label="Close panel">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </header>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="overview" class="active">Overview</button>
+      <button role="tab" data-tab="wind">Wind</button>
+      <button role="tab" data-tab="soil">Soil</button>
+      <button role="tab" data-tab="practices">Practices</button>
+    </nav>
+
+    <div class="panel-body" id="panelBody">
+
+      <!-- OVERVIEW -->
+      <section class="tab" id="tab-overview" role="tabpanel">
+        <div id="riskCard" class="risk-card loading">
+          <div class="risk-top">
+            <div>
+              <div class="eyebrow">Wind-erosion risk · bare soil</div>
+              <div class="risk-level" id="riskLevel">Analyzing…</div>
+            </div>
+            <div class="risk-gauge" id="riskGauge" aria-hidden="true"></div>
+          </div>
+          <p class="risk-text" id="riskText">Fetching soil survey and 10 years of hourly wind for this point.</p>
+        </div>
+
+        <div class="stat-grid" id="statGrid">
+          <div class="stat"><span class="k">Mean wind</span><span class="v" id="stWind">—</span></div>
+          <div class="stat"><span class="k">Erosive wind hours/yr</span><span class="v" id="stHours">—</span></div>
+          <div class="stat"><span class="k">Prevailing erosive wind</span><span class="v" id="stDir">—</span></div>
+          <div class="stat"><span class="k">Soil erodibility</span><span class="v" id="stWeg">—</span></div>
+          <div class="stat"><span class="k">Climatic factor C</span><span class="v" id="stC">—</span></div>
+          <div class="stat"><span class="k">Land cover (NLCD)</span><span class="v" id="stLc">—</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>When is this location most wind-prone?</h3></div>
+          <div class="month-strip" id="monthStrip"></div>
+          <p class="fine" id="monthStripNote">Red months carry the most erosive wind energy under dry conditions — keep soil covered then.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Dominant soil</h3><button class="link" data-goto="soil">Soil details →</button></div>
+          <div id="ovSoil" class="ov-soil"><span class="skeleton"></span></div>
+        </div>
+
+        <div class="card cta">
+          <div>
+            <h3>Get a control plan</h3>
+            <p class="fine">Pick the land use and we'll match practices to this soil, wind season and region.</p>
+          </div>
+          <button class="btn primary" data-goto="practices">Choose land use</button>
+        </div>
+      </section>
+
+      <!-- WIND -->
+      <section class="tab" id="tab-wind" role="tabpanel" hidden>
+        <div class="toolbar">
+          <label>Period
+            <select id="periodSel">
+              <option value="5">Last 5 years</option>
+              <option value="10" selected>Last 10 years</option>
+              <option value="20">Last 20 years</option>
+            </select>
+          </label>
+          <label>Units
+            <select id="unitSel">
+              <option value="mph" selected>mph</option>
+              <option value="ms">m/s</option>
+            </select>
+          </label>
+          <label class="grow">Erosive threshold <b id="thrVal">18 mph</b>
+            <input id="thrRange" type="range" min="5" max="12" step="0.5" value="8">
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Seasonal erosive wind</h3><span class="tag" id="windSrcTag">hourly</span></div>
+          <div class="chart-box tall"><canvas id="chSeason"></canvas></div>
+          <div class="chart-legend">
+            <span><i class="sw red"></i>High-risk month</span><span><i class="sw amber"></i>Elevated</span><span><i class="sw gray"></i>Lower</span><span><i class="sw line"></i>Mean wind speed</span>
+          </div>
+          <p class="fine">Bars: average hours per year with wind above the erosive threshold. Color weighs wind energy above threshold by dryness (1 − precip/ET₀).</p>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Wind speed and gusts by month</h3></div>
+          <div class="chart-box"><canvas id="chSpeed"></canvas></div>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-h"><h3>Erosive wind rose</h3></div>
+            <div id="roseBox" class="rose-box"></div>
+            <p class="fine" id="roseNote"></p>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Moisture: precipitation vs ET₀</h3></div>
+            <div class="chart-box"><canvas id="chWater"></canvas></div>
+            <p class="fine">Months where ET₀ far exceeds rain keep the surface dry and erodible.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Year-to-year trend</h3><span class="tag" id="trendTag"></span></div>
+          <div class="chart-box"><canvas id="chTrend"></canvas></div>
+          <p class="fine" id="trendNote"></p>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Wind-erosion climate indices</h3></div>
+          <div class="kv" id="windIdx"></div>
+        </div>
+        <p class="source" id="windSource"></p>
+      </section>
+
+      <!-- SOIL -->
+      <section class="tab" id="tab-soil" role="tabpanel" hidden>
+        <div class="card">
+          <div class="card-h">
+            <h3>Dominant soil</h3>
+            <span class="tag" id="soilSrcTag">SSURGO</span>
+          </div>
+          <div id="soilSummary" class="soil-summary"><span class="skeleton"></span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <h3>Surface layer — edit with your soil test</h3>
+            <button class="link" id="resetSoilBtn" hidden>Reset to survey</button>
+          </div>
+          <div class="soil-edit" id="soilEdit">
+            <label>Sand %<input type="number" id="inSand" min="0" max="100" step="1"></label>
+            <label>Silt %<input type="number" id="inSilt" min="0" max="100" step="1"></label>
+            <label>Clay %<input type="number" id="inClay" min="0" max="100" step="1"></label>
+            <label>OM %<input type="number" id="inOm" min="0" max="20" step="0.1"></label>
+            <label>CaCO₃ %<input type="number" id="inCaco3" min="0" max="80" step="1"></label>
+            <label>pH<input type="number" id="inPh" min="3" max="10" step="0.1"></label>
+          </div>
+          <div class="derived" id="soilDerived"></div>
+          <p class="fine">Edits recalculate texture class, Wind Erodibility Group and index, water-holding properties (Saxton &amp; Rawls 2006), and the practice plan. Silt fills automatically if sand + clay are given.</p>
+        </div>
+
+        <div class="card">
+          <button class="expander" id="profileToggle" aria-expanded="false">
+            <span class="plus" aria-hidden="true"></span>
+            <span><b>Detailed soil profile</b><small>Horizons, hydraulic properties, classification, site parameters</small></span>
+          </button>
+          <div id="profileDetail" class="profile-detail" hidden></div>
+        </div>
+        <p class="source" id="soilSource"></p>
+      </section>
+
+      <!-- PRACTICES -->
+      <section class="tab" id="tab-practices" role="tabpanel" hidden>
+        <div class="card">
+          <div class="card-h"><h3>1 · What is the land used for?</h3><span class="tag" id="lcSuggest"></span></div>
+          <div class="lu-grid" id="luGrid"></div>
+        </div>
+        <div class="card" id="luQuestions" hidden>
+          <div class="card-h"><h3>2 · A few details</h3></div>
+          <div id="qBox" class="q-box"></div>
+        </div>
+        <div id="planBox"></div>
+      </section>
+
+    </div>
+  </aside>
+
+  <!-- ============ LAYERS SHEET ============ -->
+  <div id="sheetBackdrop" class="sheet-backdrop" hidden></div>
+  <div id="layerSheet" class="sheet" role="dialog" aria-label="Map layers" hidden>
+    <div class="sheet-h"><h3>Map layers</h3><button class="icon-btn" id="sheetClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="sheet-body">
+      <h4>Base map</h4>
+      <div class="base-grid" id="baseGrid"></div>
+      <h4>Reference</h4>
+      <div class="toggles" id="refToggles"></div>
+      <h4>Wind erosion (statewide)</h4>
+      <div class="toggles" id="themeToggles"></div>
+      <label class="opacity">Overlay opacity <input type="range" id="opacityRange" min="0.2" max="1" step="0.05" value="0.6"></label>
+      <h4>Soils and land cover</h4>
+      <div class="toggles" id="soilToggles"></div>
+      <p class="fine">Soil map-unit lines appear at zoom 13+. Statewide overlays fade automatically as you zoom in. Imagery and labels: Esri, USGS The National Map; streets: © OpenStreetMap.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="data/layers.js?v=6"></script>
+<script src="js/util.js?v=6"></script>
+<script src="js/soil.js?v=6"></script>
+<script src="js/wind.js?v=6"></script>
+<script src="js/charts.js?v=6"></script>
+<script src="js/practices.js?v=6"></script>
+<script src="js/app.js?v=6"></script>
+</body>
+</html>
