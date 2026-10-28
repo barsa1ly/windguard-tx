@@ -584,7 +584,8 @@ CODE = [
 ]
 
 STEPS = [
-    ("Location check.", " The point is tested against the Texas outline drawn on the map (U.S. Census 1:5,000,000 state "
+    ("Location check.", " The map shows only the state chosen in the picker (Texas for now; other states are listed for "
+     "later), with everything outside it covered. The point is tested against the Texas outline (U.S. Census 1:5,000,000 state "
      "boundary). A map click or pin drag is also checked against building footprints (USA Structures), roads (Census "
      "TIGER) and water bodies (USGS NHD). If it fails, the app says why and downloads nothing. Place search lists only "
      "places inside Texas."),

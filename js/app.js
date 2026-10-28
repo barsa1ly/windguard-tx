@@ -124,7 +124,42 @@
   Object.values(refs).forEach(r => r.on && r.layer.addTo(map));
   Object.values(themes).forEach(t => t.on && t.layer.addTo(map));
   Object.values(soilLayers).forEach(t => t.on && t.layer.addTo(map));
-  L.geoJSON(LAYERS.texas, { pane: "refs", interactive: false, style: { color: "#fff", weight: 2, opacity: 0.9, fill: false } }).addTo(map);
+  /* ---------- region: only the chosen state is shown ----------
+     Everything outside it is covered and the map can't be panned or zoomed away from it. Texas is the only state with
+     data so far; the picker lists the others for later, and setRegion takes a list so states can be combined. */
+  const REGION_GEO = { TX: LAYERS.texas };
+  map.createPane("mask").style.zIndex = 460; // above every tile and overlay pane, below pins and tooltips
+  map.getPane("mask").style.pointerEvents = "none";
+  const maskRenderer = L.svg({ pane: "mask", padding: 1 }); // wide padding: no uncovered edge while dragging
+  map.options.maxBoundsViscosity = 0.9;
+  let regionLayer = null, regionBounds = null;
+  function setRegion(codes) {
+    const geos = codes.map(c => REGION_GEO[c]).filter(Boolean);
+    if (!geos.length) return;
+    if (regionLayer) map.removeLayer(regionLayer);
+    const gc = { type: "GeometryCollection", geometries: geos };
+    const holes = geos.flatMap(g => (g.type === "MultiPolygon" ? g.coordinates : [g.coordinates]).map(p => p[0].map(([x, y]) => [y, x])));
+    const world = [[-85, -180], [-85, 180], [85, 180], [85, -180]];
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#f3f1ea";
+    regionLayer = L.layerGroup([
+      L.polygon([world, ...holes], { renderer: maskRenderer, stroke: false, fillColor: bg, fillOpacity: 1, interactive: false }),
+      L.geoJSON(gc, { renderer: maskRenderer, interactive: false, style: { color: "#33403a", weight: 2, fill: false } }),
+    ]).addTo(map);
+    regionBounds = L.geoJSON(gc).getBounds();
+    map.setMaxBounds(regionBounds.pad(0.2));
+    fitMinZoom();
+    map.fitBounds(regionBounds, { animate: false });
+    state.region = codes;
+    const sel = $("#regionSel");
+    $("#regionLabel").textContent = codes.length > 1 ? `${codes.length} states` : sel.selectedOptions[0].textContent;
+    $("#regionLabel").dataset.short = codes.length > 1 ? `${codes.length}` : codes[0];
+  }
+  function fitMinZoom() { // no zooming out past the whole state
+    if (regionBounds) map.setMinZoom(Math.max(3, map.getBoundsZoom(regionBounds.pad(0.05))));
+  }
+  map.on("resize", fitMinZoom);
+  $("#regionSel").addEventListener("change", e => setRegion([e.target.value]));
+  setRegion(["TX"]);
 
   /* ---------- layer sheet ---------- */
   function buildLayerSheet() {

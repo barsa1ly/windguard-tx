@@ -707,3 +707,16 @@ table.grid td.l { text-align: left; }
 
 /* Census county lines arrive grey; lighten them and add a thin dark halo so they show on imagery and street maps */
 .county-lines { filter: brightness(1.7) drop-shadow(0 0 1.2px rgba(0, 0, 0, .75)); }
+
+/* state picker: a pill over a native select, so phones get their own picker list */
+.region { position: relative; flex: none; display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 10px 0 14px;
+  border-radius: 12px; background: rgba(28, 36, 32, .88); color: #f3b38f; font-weight: 700; font-size: 14px;
+  box-shadow: var(--shadow); backdrop-filter: blur(6px); cursor: pointer; }
+.region svg { width: 16px; height: 16px; fill: none; stroke: #fff; stroke-width: 2; }
+.region select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; }
+.region:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 767px) {
+  .region { padding: 0 6px 0 10px; }
+  .region span { font-size: 0; }
+  .region span::after { content: attr(data-short); font-size: 14px; }
+}
