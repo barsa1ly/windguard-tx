@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=11">
+  <link rel="stylesheet" href="css/app.css?v=12">
 </head>
 <body>
 <div id="app" class="app">
@@ -48,6 +48,9 @@
       </button>
       <button id="locateBtn" class="tool-btn" title="Use my location" aria-label="Use my location">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <button id="methodsBtn" class="tool-btn" title="Methods, equations and data sources" aria-label="Methods, equations and data sources">
+        <svg viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8.5 12h7M8.5 15.5h7M8.5 8.5h3"/></svg>
       </button>
     </div>
 
@@ -100,6 +103,7 @@
             <div class="risk-gauge" id="riskGauge" aria-hidden="true"></div>
           </div>
           <p class="risk-text" id="riskText">Fetching soil survey and 10 years of hourly wind for this point.</p>
+          <button class="link risk-how" data-methods="m-erod">How this is calculated →</button>
         </div>
 
         <div class="stat-grid" id="statGrid">
@@ -108,7 +112,7 @@
           <div class="stat"><span class="k">Prevailing erosive wind</span><span class="v" id="stDir">—</span></div>
           <div class="stat"><span class="k">Soil erodibility</span><span class="v" id="stWeg">—</span></div>
           <div class="stat"><span class="k">Climatic factor C</span><span class="v" id="stC">—</span></div>
-          <div class="stat"><span class="k">Land cover (NLCD)</span><span class="v" id="stLc">—</span></div>
+          <div class="stat"><span class="k">Land cover</span><span class="v" id="stLc">—</span></div>
         </div>
 
         <div class="card">
@@ -138,7 +142,13 @@
             <select id="srcSel">
               <option value="cal">Calibrated to nearest airport</option>
               <option value="station">Airport station only</option>
-              <option value="model">Reanalysis only</option>
+              <option value="model">Gridded model only</option>
+            </select>
+          </label>
+          <label>Model
+            <select id="modelSel">
+              <option value="ecmwf" selected>ECMWF (via Open-Meteo)</option>
+              <option value="merra2">NASA MERRA-2 (direct)</option>
             </select>
           </label>
           <label>Period
@@ -180,7 +190,7 @@
             <p class="fine" id="roseNote"></p>
           </div>
           <div class="card">
-            <div class="card-h"><h3>Moisture: precipitation vs ET₀</h3></div>
+            <div class="card-h"><h3>Moisture: precipitation vs ET₀</h3><span class="tag" id="moistTag">gridMET</span></div>
             <div class="chart-box"><canvas id="chWater"></canvas></div>
             <p class="fine">Months where ET₀ far exceeds rain keep the surface dry and erodible.</p>
           </div>
@@ -197,7 +207,7 @@
             <select id="stnSel" class="mini-select" aria-label="Calibration station"></select></div>
           <div class="chart-box"><canvas id="chCal"></canvas></div>
           <div class="kv" id="calKv" style="margin-top:10px"></div>
-          <p class="fine">Hourly reanalysis smooths wind over a 9–28 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the airport (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
+          <p class="fine">Hourly reanalysis smooths wind over a 9–50 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the airport (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
         </div>
 
         <div class="card">
@@ -231,7 +241,7 @@
             <label>pH<input type="number" id="inPh" min="3" max="10" step="0.1"></label>
           </div>
           <div class="derived" id="soilDerived"></div>
-          <p class="fine">Edits recalculate texture class, Wind Erodibility Group and index, water-holding properties (Saxton &amp; Rawls 2006), and the practice plan. Silt fills automatically if sand + clay are given.</p>
+          <p class="fine">Edits recalculate texture class, Wind Erodibility Group and index, RWEQ erodible fraction and crust factor, water-holding properties (Saxton &amp; Rawls 2006), and the practice plan. Silt fills automatically if sand + clay are given.</p>
         </div>
 
         <div class="card">
@@ -278,18 +288,32 @@
     </div>
   </div>
 
+  <!-- ============ METHODS SHEET ============ -->
+  <div id="methodsSheet" class="sheet wide" role="dialog" aria-label="Methods, equations and data sources" hidden>
+    <div class="sheet-h"><h3>Methods, equations &amp; data sources</h3><button class="icon-btn" id="methodsClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <nav class="seg-nav" id="methodsNav" aria-label="Sections">
+      <button data-sec="m-site" class="on">This location</button>
+      <button data-sec="m-sources">Data sources</button>
+      <button data-sec="m-erod">Erodibility</button>
+      <button data-sec="m-wind">Wind &amp; climate</button>
+      <button data-sec="m-soil">Soil water</button>
+    </nav>
+    <div class="sheet-body" id="methodsBody"></div>
+  </div>
+
   <div id="toast" class="toast" role="status" hidden></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=11"></script>
-<script src="data/stations.js?v=11"></script>
-<script src="js/util.js?v=11"></script>
-<script src="js/soil.js?v=11"></script>
-<script src="js/wind.js?v=11"></script>
-<script src="js/charts.js?v=11"></script>
-<script src="js/practices.js?v=11"></script>
-<script src="js/app.js?v=11"></script>
+<script src="data/layers.js?v=12"></script>
+<script src="data/stations.js?v=12"></script>
+<script src="js/util.js?v=12"></script>
+<script src="js/soil.js?v=12"></script>
+<script src="js/wind.js?v=12"></script>
+<script src="js/charts.js?v=12"></script>
+<script src="js/practices.js?v=12"></script>
+<script src="js/methods.js?v=12"></script>
+<script src="js/app.js?v=12"></script>
 </body>
 </html>

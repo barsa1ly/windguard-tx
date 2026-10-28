@@ -365,6 +365,19 @@ WG.soil = (function () {
     return `*SOILS: WindGuard TX export (${new Date().toISOString().slice(0, 10)})\n\n` + out.join("\n") + "\n";
   }
 
+  /* RWEQ surface-soil factors (Fryrear et al. 1994, 1998): erodible fraction EF (dry aggregates < 0.84 mm) and soil
+     crust factor SCF, from sand, silt, clay, OM and CaCO3 in %. inRange: inputs inside the 57 soils the equations were fitted to. */
+  function rweq(sf) {
+    if (!sf || sf.sand == null || sf.clay == null) return null;
+    const Sa = sf.sand, Cl = sf.clay, Si = sf.silt ?? 100 - Sa - Cl, OM = sf.om ?? 1, Ca = sf.caco3 ?? 0;
+    const ratio = Sa / Math.max(Cl, 0.5);
+    const ef = (29.09 + 0.31 * Sa + 0.17 * Si + 0.33 * ratio - 2.59 * OM - 0.95 * Ca) / 100;
+    const scf = 1 / (1 + 0.0066 * Cl * Cl + 0.021 * OM * OM);
+    const inRange = Sa >= 5.5 && Sa <= 93.6 && Si >= 0.5 && Si <= 69.5 && Cl >= 5 && Cl <= 39.3 &&
+      ratio >= 1.2 && ratio <= 53 && OM >= 0.18 && OM <= 4.79 && Ca <= 25.2;
+    return { ef: Math.min(1, Math.max(0, ef)), scf, inRange };
+  }
+
   return { fetchSoil, parseTexture, textureClass, refineCode, wegFromSurface, saxtonRawls, profileLayers, siteParams,
-    toCSV, toSOL, TEX, FAMILY, WEG_I, WEG_RISK, curveNumber };
+    rweq, toCSV, toSOL, TEX, FAMILY, WEG_I, WEG_RISK, curveNumber };
 })();

@@ -1,0 +1,174 @@
+/* Methods sheet: where each value came from for the current site, the data-source catalog, and every equation the app uses. */
+WG.methods = (function () {
+  const { $, $$, esc } = WG.util;
+  const A = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  const USED = '<span class="badge used">used</span>', CHECK = '<span class="badge check">cross-check</span>',
+    REF = '<span class="badge ref">reference only</span>', FALLBACK = '<span class="badge ref">fallback</span>';
+
+  /* [data, producer, how the app reads it, resolution · period, if it fails] */
+  const SOURCES = [
+    ["Hourly 10 m wind speed and direction (default)", "ECMWF: IFS operational analysis; ERA5 reanalysis by Copernicus C3S",
+      `${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} archive, a re-hosted copy. ECMWF and the Copernicus CDS have no point API a web page can call: they need a personal key and queued jobs that take minutes.`,
+      "9 km hourly (2017 on); 0.25° (~28 km) hourly (before 2017)", "NASA MERRA-2"],
+    ["Hourly 10 m wind speed and direction (alternative)", "NASA GMAO MERRA-2 reanalysis",
+      `<b>Direct:</b> ${A("https://power.larc.nasa.gov/docs/services/api/temporal/hourly/", "NASA POWER")} hourly API`, "0.5° × 0.625° (~50 km) hourly, 2001 on", "ECMWF via Open-Meteo"],
+    ["Daily maximum gust (model)", "ECMWF IFS / ERA5", "Open-Meteo, with the hourly wind", "as above",
+      "MERRA-2 has no gust; calibration then maps daily max wind to airport gusts"],
+    ["Airport wind observations (ASOS/AWOS)", `NWS/FAA stations, archived by NOAA NCEI in ${A("https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly", "GHCNh")} (successor to ISD, which stopped in Aug 2025)`,
+      `<b>Direct:</b> ${A("https://www.ncei.noaa.gov/access/services/data/v1", "NCEI Access Data Service")}, wind columns only, one request per year`, "station, routine hourly METAR, decades",
+      `${A("https://mesonet.agron.iastate.edu/request/download.phtml", "Iowa Environmental Mesonet")} ASOS archive (NWS METAR feed)`],
+    ["Daily precipitation, grass reference ET₀, max/min temperature", `${A("https://www.climatologylab.org/gridmet.html", "gridMET")}, University of Idaho (Abatzoglou 2013): PRISM-based precipitation, NLDAS-2 meteorology, ASCE Penman–Monteith ET₀`,
+      `<b>Direct:</b> ${A("https://thredds.northwestknowledge.net/thredds/reacch_climate_MET_aggregated_catalog.html", "THREDDS")} OPeNDAP, one cell, scale and offset read from the file`, "4 km (1/24°) daily, 1979 on", "ECMWF daily via Open-Meteo, then NASA POWER daily"],
+    ["Soil profile, WEG, I, T, MLRA, climatic factor C", "USDA-NRCS Soil Survey Geographic Database (SSURGO)",
+      `<b>Direct:</b> ${A("https://sdmdataaccess.nrcs.usda.gov/", "Soil Data Access")} REST queries`, "map units, 1:12,000–1:24,000", "none: enter a soil test on the Soil tab"],
+    ["Elevation, slope, aspect", "USGS 3D Elevation Program (3DEP)", `<b>Direct:</b> ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")}, 5 points`, "1–10 m lidar/DEM", "Copernicus GLO-90 via Open-Meteo"],
+    ["Land cover", "USGS / MRLC National Land Cover Database 2021", `<b>Direct:</b> ${A("https://www.mrlc.gov/", "MRLC")} WMS feature query (MRLC currently refuses browser requests)`, "30 m",
+      `Sentinel-2 10 m land cover, latest year (${A("https://livingatlas.arcgis.com/landcover/", "Impact Observatory, Microsoft, Esri")}), direct`],
+    ["Statewide susceptibility and WEG maps", "SSURGO, gridded by UC Davis SoilWeb (800 m WEI, WEG) × NRCS county C",
+      "Pre-built 1 km PNGs (tools/build_layers.py)", "1 km", "direct alternative: gNATSGO rasters (multi-GB)"],
+    ["Statewide windy-season map; C where a county value is missing", "NASA MERRA-2 climatology", "Pre-built from NASA POWER (tools/fetch_power_grid.py)", "0.5° × 0.625°, 2001–2025", "—"],
+    ["Airport list and NOAA station ids", "IEM station networks; NOAA ISD history and GHCNh station list", "Pre-built data/stations.js (tools/fetch_stations.py)", "417 stations in TX, NM, OK, LA, AR", "—"],
+    ["Imagery, labels, roads, rivers", "Esri World Imagery and Reference; USGS The National Map", "Map tiles, direct", "to ~0.5 m", "—"],
+    ["Soil map-unit lines", "USDA-NRCS SSURGO", "Soil Data Access WMS, direct (zoom 13+)", "—", "—"],
+    ["Place search and names", "OpenStreetMap contributors", "Nominatim, direct", "—", "—"],
+    ["Practice recommendations", "NRCS Texas FOTG standards, Texas A&M AgriLife, TxDOT, WAFWA, published trials", "Encoded in js/practices.js from docs/RESEARCH.md", "—", "—"],
+  ];
+
+  /* [quantity, equation, terms and units, where the app uses it, source, status] */
+  const EROD = [
+    ["Bare-field potential soil loss (WEQ step E3)", "E = I × K × C / 100,&nbsp; K = 1",
+      "E: t/ac/yr; I: soil erodibility index (t/ac/yr); K: ridge-roughness factor (1 = smooth); C: climatic factor (%). Wide, bare, unsheltered field.",
+      "Overview risk card; statewide susceptibility map", "Woodruff &amp; Siddoway 1965; NRCS National Agronomy Manual Part 502", USED],
+    ["Climatic factor", "C = 34.483 · v³ / PE²",
+      "v: mean annual wind speed at 30 ft (mph); PE: Thornthwaite index. Garden City, KS = 100.",
+      "Site C is NRCS's published value for the map unit; this equation fills statewide cells with no county value", "Chepil, Siddoway &amp; Armbrust 1962", USED],
+    ["Thornthwaite precipitation-effectiveness index", "PE = Σ<sub>12 months</sub> 115 [ P / (T − 10) ]<sup>10/9</sup>",
+      "P: monthly precipitation (in, minimum 0.5); T: monthly mean temperature (°F, minimum 28.4).", "Statewide C where a county value is missing", "Thornthwaite 1931; NAM Part 502", USED],
+    ["Erodibility index (highly erodible land, wind)", "EI = C · I / T&nbsp; (C as a fraction)",
+      "T: tolerable soil loss from SSURGO (t/ac/yr). EI ≥ 8 meets the wind criterion for highly erodible land.", "Overview risk card", "7 CFR 12.21; NRCS NFSAM", USED],
+    ["Wind Erodibility Group and I from the surface layer", "WEG = f(texture, CaCO₃, coarse fragments) → I",
+      "WEG 1 sands (I 160–310) · 2 loamy sands (134) · 3 sandy loams (86) · 4 clays (86) · 4L calcareous loams (86) · 5 noncalcareous loams (56) · 6 (48) · 7 silts (38) · 8 stony (0). Calcareous = CaCO₃ ≥ 5% (app proxy for strong effervescence). Coarse fragments 15–35% → one group less erodible, 35–60% → two, > 60% → I = 0.",
+      "Soil tab when you edit the surface layer (otherwise SSURGO's own WEG and I)", "NRCS National Soil Survey Handbook Part 618.95", USED],
+    ["Texture class", "USDA texture triangle (sand, silt, clay %)", "Sand-size modifier (e.g. fine sandy loam) kept from the survey when the family is unchanged.",
+      "Soil tab", "Soil Survey Manual (USDA Handbook 18, 2017)", USED],
+    ["Risk classes", "E &lt; 10 Low · 10–40 Moderate · 40–80 High · 80–150 Very high · &gt; 150 Extreme",
+      "t/ac/yr; roughly 2, 8, 16 and 30 times T = 5.", "Overview risk card", "App convention, not NRCS classes", USED],
+    ["RWEQ erodible fraction", "EF = (29.09 + 0.31 Sa + 0.17 Si + 0.33 Sa/Cl − 2.59 OM − 0.95 CaCO₃) / 100",
+      "Sa, Si, Cl: sand, silt, clay (%); OM, CaCO₃ (%). EF: fraction of dry aggregates &lt; 0.84 mm. Fitted on soils with Sa 5.5–93.6, Si 0.5–69.5, Cl 5–39.3, Sa/Cl 1.2–53, OM 0.18–4.79, CaCO₃ 0–25.2.",
+      "Soil tab, as an independent check on WEG", "Fryrear et al. 1994; Fryrear et al. 1998 (RWEQ)", CHECK],
+    ["RWEQ soil crust factor", "SCF = 1 / (1 + 0.0066 Cl² + 0.021 OM²)", "Cl: clay (%); OM (%). Lower SCF = stronger crust, less erosion.",
+      "Soil tab", "Fryrear et al. 1998 (RWEQ)", CHECK],
+    ["Flat cover and erosion", "SLR = e<sup>−0.0438 · SC</sup>",
+      "SC: % of soil surface covered; SLR: soil-loss ratio vs bare. The app uses the extension table: 10% cover → 35% less erosion, 30% → 70%, 50% → 85%, 70% → 93%.",
+      "Practices tab cover targets (≥ 60% on WEG 1–2, ≥ 40% on WEG 3–4L, ≥ 30% otherwise)", "Fryrear 1985; NebGuide G1537", USED],
+    ["Residue needed for a target loss", "residue = E-table ratio × (site E / table E)",
+      "NAM Exhibit 502-1 ratios for I 86, C 100, wide field, scaled to the site's E. Approximate.", "Practices tab residue table", "NRCS NAM Exhibit 502-1", USED],
+    ["Barrier and ridge spacing", "barrier spacing ≤ 10 H · windbreak protects 10 H leeward + 2 H windward · ridge spacing ≤ 4 × ridge height",
+      "H: barrier height. Barriers ≥ 1.5 ft tall, 40–50% porous; trap strips ≥ 15 ft wide.", "Practices tab", "NRCS Texas standards 603, 380, 588, 589C", USED],
+    ["RWEQ weather factor", "WF = Wf · (ρ / g) · SW · SD,&nbsp; Wf = Σ U₂ (U₂ − Uₜ)² · N<sub>d</sub> / N",
+      "U₂: wind at 2 m (m/s); Uₜ = 5 m/s; ρ: air density; g = 9.81 m/s²; SW: soil wetness; SD: snow-free fraction; N<sub>d</sub>: days in period; N: observations.",
+      "Not computed. The app's monthly risk index uses the same idea: wind energy above threshold × dryness.", "Fryrear et al. 1998 (RWEQ)", REF],
+    ["RWEQ transport capacity and field length", "Q<sub>max</sub> = 109.8 (WF · EF · SCF · K′ · COG) · s = 150.71 (WF · EF · SCF · K′ · COG)<sup>−0.3711</sup> · Q(x) = Q<sub>max</sub> [1 − e<sup>−(x/s)²</sup>]",
+      "Q: kg/m; s: critical field length (m); K′: roughness; COG: crop and residue factors; x: distance downwind (m).",
+      "Not computed: needs field length, roughness and cover. NRCS designs fields with WEPS.", "Fryrear et al. 1998 (RWEQ)", REF],
+  ];
+
+  const WIND = [
+    ["Erosive threshold", "uₜ = 8 m/s at 10 m", "≈ 13 mph at 1 ft ≈ 18 mph at 30 ft. Adjustable 5–12 m/s on the Wind tab.", "All erosive-wind metrics", "Lyles &amp; Krauss 1971; NAM Part 502", USED],
+    ["Erosive hours", "N<sub>m</sub> = (n<sub>u ≥ uₜ</sub> / n) × 24 × days<sub>m</sub>", "n: hours with data in month m (normalizes station gaps).", "Overview, Wind tab", "App", USED],
+    ["Erosive wind energy", "E<sub>m</sub> = Σ u² (u − uₜ), scaled to a full month", "u: hourly 10 m wind (m/s).", "Risk index, rose, prevailing direction", "After Bagnold 1941 (cubic transport); app", USED],
+    ["Dryness", "D = clamp( (ET₀ − P) / ET₀, 0, 1 )", "P: precipitation; ET₀: grass reference ET (mm/month), gridMET.", "Risk index", "App, after FAO 1979", USED],
+    ["Monthly risk index and red months", "R<sub>m</sub> = E<sub>m</sub> × D<sub>m</sub>,&nbsp; share<sub>m</sub> = R<sub>m</sub> / Σ R", "Red: share ≥ 10% (8.3% if even); amber ≥ 6.7%.", "Month strip, seasonal chart", "App convention", USED],
+    ["Gust days", "daily max gust ≥ 17.9 m/s (40 mph)", "Blowing-dust days.", "Wind tab", "App", USED],
+    ["Log-law height conversion", "u₂ = u<sub>z</sub> · 4.87 / ln(67.8 z − 5.42) → u₂ = 0.748 u₁₀", "z: measurement height (m).", "FAO climatic index", "Allen et al. 1998, FAO-56 Eq. 47", USED],
+    ["FAO wind-erosion climatic index", "C<sub>FAO</sub> = (1/100) Σ<sub>months</sub> u₂³ · (ET₀ − P)/ET₀ · d", "u₂: mean monthly wind at 2 m (m/s); d: days. Months with P &gt; ET₀ count as 0.", "Wind tab", "FAO 1979", USED],
+    ["Sand drift potential", "DP = Σ V² (V − Vₜ) / N,&nbsp; Vₜ = 12 kt", "V: hourly wind at 10 m (knots); N: all hours. RDP: length of the vector sum; RDD: its direction. DP &lt; 200 low, 200–399 intermediate, ≥ 400 high (VU).",
+      "Wind tab", "Fryberger &amp; Dean 1979", USED],
+    ["Prevailing erosive direction", "sector k with max 0.5 E<sub>k−1</sub> + E<sub>k</sub> + 0.5 E<sub>k+1</sub>", "16 sectors of 22.5°. Barrier and strip rows run at that direction + 90°.", "Wind tab, Practices", "App", USED],
+    ["Resultant transport direction", "atan2( Σ E sin(θ + 180°), Σ E cos(θ + 180°) )", "θ: direction the wind blows from.", "Wind tab", "App", USED],
+    ["Trend", "b = Σ(x − x̄)(y − ȳ) / Σ(x − x̄)²,&nbsp; t = b / SE(b)", "y: erosive hours per year; x: year. Significant if |t| &gt; t<sub>0.975, n−2</sub>.", "Wind tab", "Ordinary least squares", USED],
+    ["Calibration to the airport (quantile mapping)", "u′ = F<sup>−1</sup><sub>obs, m</sub>( F<sub>model, m</sub>(u) )",
+      "F: empirical distribution for calendar month m, 101 quantiles 0.1–99.9%, trained on the model at the station's cell vs the station, same hours; beyond the ends u′ = u · q<sub>obs</sub>/q<sub>model</sub>. Applied to the model at the site. Gusts mapped the same way.",
+      "Wind tab default", "Panofsky &amp; Brier 1968; Themeßl et al. 2011", USED],
+    ["Station hourly series and QC", "report nearest each whole hour (routine METAR, FM-15)", "Dropped: u &gt; 40 m/s, gust &gt; 55 m/s or below u, NCEI quality codes 2, 3, 6, 7.", "Calibration, station-only option", "App", USED],
+    ["Model vs station statistics", "bias = mean(u<sub>model</sub> − u<sub>obs</sub>) · RMSE = √mean((u<sub>model</sub> − u<sub>obs</sub>)²) · Pearson r", "Same hours at the station.", "Comparison card", "Standard", USED],
+    ["Grass reference ET₀ (computed by gridMET)", "ET₀ = [0.408 Δ (R<sub>n</sub> − G) + γ (900 / (T + 273)) u₂ (e<sub>s</sub> − e<sub>a</sub>)] / [Δ + γ (1 + 0.34 u₂)]",
+      "ASCE standardized Penman–Monteith, daily, short grass: Δ slope of vapor-pressure curve, R<sub>n</sub> net radiation, G soil heat flux, γ psychrometric constant, e<sub>s</sub> − e<sub>a</sub> vapor-pressure deficit.",
+      "Dryness factor, moisture chart", "ASCE-EWRI 2005; Abatzoglou 2013", USED],
+    ["Hargreaves ET₀", "ET₀ = 0.0023 (R<sub>a</sub> / 2.45)(T + 17.8) √(T<sub>max</sub> − T<sub>min</sub>)", "R<sub>a</sub>: extraterrestrial radiation, FAO-56 Eq. 21; T in °C.",
+      "Only if gridMET and Open-Meteo both fail", "Hargreaves &amp; Samani 1985", FALLBACK],
+  ];
+
+  const SOIL = [
+    ["Wilting point (Saxton &amp; Rawls)", "θ₁₅₀₀ₜ = −0.024S + 0.487C + 0.006OM + 0.005 S·OM − 0.013 C·OM + 0.068 S·C + 0.031;&nbsp; θ₁₅₀₀ = θ₁₅₀₀ₜ + (0.14 θ₁₅₀₀ₜ − 0.02)",
+      "S, C: sand and clay fractions; OM: % (capped at 8).", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
+    ["Field capacity", "θ₃₃ₜ = −0.251S + 0.195C + 0.011OM + 0.006 S·OM − 0.027 C·OM + 0.452 S·C + 0.299;&nbsp; θ₃₃ = θ₃₃ₜ + (1.283 θ₃₃ₜ² − 0.374 θ₃₃ₜ − 0.015)", "", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
+    ["Saturation", "θ<sub>S−33t</sub> = 0.278S + 0.034C + 0.022OM − 0.018 S·OM − 0.027 C·OM − 0.584 S·C + 0.078;&nbsp; θ<sub>S−33</sub> = θ<sub>S−33t</sub> + (0.636 θ<sub>S−33t</sub> − 0.107);&nbsp; θ<sub>S</sub> = θ₃₃ + θ<sub>S−33</sub> − 0.097S + 0.043", "", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
+    ["Bulk density", "ρ<sub>B</sub> = (1 − θ<sub>S</sub>) × 2.65", "g/cm³.", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
+    ["Saturated conductivity", "B = (ln 1500 − ln 33) / (ln θ₃₃ − ln θ₁₅₀₀);&nbsp; K<sub>s</sub> = 1930 (θ<sub>S</sub> − θ₃₃)<sup>3 − 1/B</sup>", "K<sub>s</sub> in mm/h.", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
+    ["Plant-available water", "AWC = DUL − LL", "cm³/cm³; shown as in/ft.", "Soil tab", "—", USED],
+    ["Organic carbon; total N", "OC = OM / 1.724;&nbsp; N ≈ OC / 10, at most 0.5%", "%.", "Soil profile, .SOL export", "Van Bemmelen factor; DSSAT convention", USED],
+    ["Saturation check", "SAT = <code>wsatiated_r</code>/100, else Saxton–Rawls, else 1 − ρ<sub>B</sub>/2.65;&nbsp; SAT ≥ DUL + 0.01", "", "Soil profile", "DSSAT convention", USED],
+    ["Unit conversions", "K<sub>sat</sub> (cm/h) = µm/s × 0.36 · coarse fragments = 100 − % passing #10 sieve", "", "Soil profile", "—", USED],
+    ["Root growth factor", "SRGF = 1 (layer ending ≤ 15 cm), else exp(−0.02 × mid-depth); 0 below a restrictive layer", "Depth in cm.", "Soil profile, .SOL export", "DSSAT convention", USED],
+    ["Stage-1 evaporation limit", "U = min(9.9, 5 + 0.15 (clay + 2))", "U in mm; clay %.", ".SOL export", "Ritchie; DSSAT tools", USED],
+    ["Drainage rate", "very poorly 0.01 · poorly 0.05 · somewhat poorly 0.25 · moderately well 0.40 · well 0.60 · somewhat excessively 0.75 · excessively 0.85", "Fraction per day.", ".SOL export", "DSSAT convention", USED],
+    ["Runoff curve number", "A 61/64/68/71 · B 73/76/80/83 · C 81/84/88/91 · D 84/87/91/94", "By hydrologic group (second letter of dual groups) and slope 0–2, 2–5, 5–10, &gt; 10%.", ".SOL export", "NRCS NEH Part 630; DSSAT", USED],
+    ["Slope and aspect from the DEM", "slope = 100 √(g<sub>x</sub>² + g<sub>y</sub>²),&nbsp; g<sub>x</sub> = (z<sub>E</sub> − z<sub>W</sub>) / 2Δx,&nbsp; aspect = atan2(−g<sub>x</sub>, −g<sub>y</sub>)", "Elevations 100 m N, S, E and W of the point.", "Header, soil profile", "Finite differences", USED],
+  ];
+
+  function table(cols, rows, cls) {
+    return `<div class="mtable-wrap"><table class="mtable ${cls || ""}"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(r => `<tr>${r.map((v, i) => `<td data-label="${esc(cols[i])}">${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }
+  const eqRows = rows => rows.map(([q, eq, terms, use, src, st]) => [`<b>${q}</b> ${st}`, `<span class="eq">${eq}</span>`, terms, use, src]);
+  const EQ_COLS = ["Quantity", "Equation", "Terms and units", "Used for", "Source"];
+
+  function siteHTML() {
+    const rows = WG.siteSources ? WG.siteSources() : [];
+    if (!WG.state.site) return '<p class="fine">Tap a location on the map to see which source supplied each value there.</p>';
+    if (!rows.length) return '<p class="fine">Still loading data for this location…</p>';
+    return table(["Data", "Value used here", "Source"], rows, "site");
+  }
+
+  function render() {
+    $("#methodsBody").innerHTML = `
+      <p class="fine">“Direct” means the app downloads from the agency that produces the data. The default ECMWF wind is the exception: ECMWF and Copernicus offer no point service a web page can call without a personal key and a queued job, so the app reads Open-Meteo's copy of the same fields. Pick <b>NASA MERRA-2 (direct)</b> under Model on the Wind tab for a fully direct path; at Lubbock its hourly correlation with the airport is 0.71 against 0.80 for ECMWF, and calibration removes most of the difference in monthly totals.</p>
+      <section id="m-site"><h4>This location</h4>${siteHTML()}</section>
+      <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}</section>
+      <section id="m-erod"><h4>Erodibility equations</h4>${table(EQ_COLS, eqRows(EROD), "eqs")}</section>
+      <section id="m-wind"><h4>Wind and climate equations</h4>${table(EQ_COLS, eqRows(WIND), "eqs")}</section>
+      <section id="m-soil"><h4>Soil water and profile equations</h4>${table(EQ_COLS, eqRows(SOIL), "eqs")}</section>
+      <p class="fine">Full derivations and references: docs/METHODS.md and docs/RESEARCH.md in the ${A("https://github.com/barsa1ly/windguard-tx", "project repository")}.</p>`;
+  }
+
+  function open(section) {
+    render();
+    $("#methodsSheet").hidden = false;
+    $("#sheetBackdrop").hidden = false;
+    const target = section && $("#" + section);
+    setTimeout(() => { $("#methodsBody").scrollTop = target ? target.offsetTop : 0; }, 0); // after the sheet has laid out
+    $$("#methodsNav button").forEach(b => b.classList.toggle("on", b.dataset.sec === (section || "m-site")));
+  }
+  function close() {
+    $("#methodsSheet").hidden = true;
+    $("#sheetBackdrop").hidden = true;
+  }
+
+  $("#methodsBtn").addEventListener("click", () => open());
+  $("#methodsClose").addEventListener("click", close);
+  $("#methodsNav").addEventListener("click", e => {
+    const b = e.target.closest("button[data-sec]");
+    if (!b) return;
+    const t = $("#" + b.dataset.sec);
+    $("#methodsBody").scrollTo({ top: t.offsetTop, behavior: "smooth" });
+    $$("#methodsNav button").forEach(x => x.classList.toggle("on", x === b));
+  });
+  document.addEventListener("click", e => {
+    const b = e.target.closest("[data-methods]");
+    if (b) { e.preventDefault(); open(b.dataset.methods); }
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#methodsSheet").hidden) close(); });
+
+  return { open, close };
+})();

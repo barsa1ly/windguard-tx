@@ -1,6 +1,26 @@
 # Methods: formulas and data used by WindGuard TX
 
-This file lists every calculation the app makes, with its source. `docs/RESEARCH.md` holds the practice-by-practice evidence behind the recommendations.
+This file lists every calculation the app makes, with its source. `docs/RESEARCH.md` holds the practice-by-practice evidence behind the recommendations. The same tables are in the app's Methods sheet (page icon on the map).
+
+## 0. Data sources
+
+"Direct" means the app downloads from the agency that produces the data.
+
+| Data | Producer | How the app reads it | Resolution · period | If it fails |
+|---|---|---|---|---|
+| Hourly 10 m wind (default) | ECMWF IFS analysis; ERA5 (Copernicus C3S) | Open-Meteo archive, a copy. ECMWF/CDS need a personal key and queued jobs, which a web page can't use. | 9 km (2017 on); 0.25° (before) | NASA MERRA-2 |
+| Hourly 10 m wind (option) | NASA GMAO MERRA-2 | NASA POWER hourly API, direct | 0.5° × 0.625°, 2001 on | ECMWF via Open-Meteo |
+| Daily max gust | ECMWF IFS / ERA5 | Open-Meteo | as above | MERRA-2 has none; calibration maps daily max wind to station gusts |
+| Airport observations | NWS/FAA ASOS/AWOS, archived in NOAA NCEI GHCNh (ISD stopped Aug 2025) | NCEI Access Data Service, direct; wind columns, one request per year | routine hourly METAR | Iowa Environmental Mesonet ASOS archive |
+| Precipitation, grass ET₀, Tmax/Tmin | gridMET, University of Idaho (Abatzoglou 2013) | THREDDS OPeNDAP, direct; packing read from the file | 4 km daily, 1979 on | ECMWF daily via Open-Meteo, then NASA POWER daily + Hargreaves |
+| Soil profile, WEG, I, T, MLRA, C | USDA-NRCS SSURGO | Soil Data Access, direct | 1:12k–1:24k map units | none |
+| Elevation, slope, aspect | USGS 3DEP | Elevation Point Query Service, direct | 1–10 m | Copernicus GLO-90 via Open-Meteo |
+| Land cover | USGS/MRLC NLCD 2021 | MRLC WMS, direct (MRLC currently refuses browser requests) | 30 m | Sentinel-2 10 m land cover, latest year (Impact Observatory, Microsoft, Esri) |
+| Statewide maps | SSURGO via UC Davis SoilWeb; NRCS county C; NASA POWER climatology | pre-built (`tools/`) | 1 km | — |
+
+**Checks, 2016–2025:**
+- **NOAA GHCNh vs the Iowa Mesonet:** at Lubbock (LBB) the two give 1,322 and 1,321 erosive h/yr. At Hobbs (HOB) GHCNh covers 97% of hours against 68% for the Iowa Mesonet routine reports. On shared hours the erosive share agrees (10.9% vs 10.8%), but the missing Iowa Mesonet hours were mostly calm, so its annual total read high (959 vs 820 h/yr).
+- **NASA MERRA-2 vs LBB:** hourly r = 0.71, RMSE 1.96 m/s, mean 4.94 vs 5.24 m/s, 8.7% vs 15.1% erosive hours. ECMWF: r = 0.80, RMSE 1.85 m/s, mean 4.41 m/s, 5.3%. After calibration both give the same months and direction at a Gaines County test site: 823 h/yr with MERRA-2 and 784 h/yr with ECMWF, both Jan–Apr and WSW.
 
 ## 1. Bare-soil wind-erosion potential (Overview risk card, statewide map)
 
@@ -39,41 +59,49 @@ The texture class comes from the USDA triangle. The survey's sand-size modifier 
 | 7 | Noncalcareous SI | 38 |
 | 8 | Very stony or bouldery surface | 0 |
 
+- **RWEQ cross-checks** (Soil tab; Fryrear et al. 1994, 1998):
+  - Erodible fraction: EF = (29.09 + 0.31 Sa + 0.17 Si + 0.33 Sa/Cl − 2.59 OM − 0.95 CaCO₃)/100, the fraction of dry aggregates < 0.84 mm.
+  - Soil crust factor: SCF = 1/(1 + 0.0066 Cl² + 0.021 OM²).
+  - All inputs are in %. Values are flagged when the soil is outside the fitted range: Sa 5.5–93.6, Si 0.5–69.5, Cl 5–39.3, Sa/Cl 1.2–53, OM 0.18–4.79, CaCO₃ 0–25.2.
+  - The RWEQ weather factor and transport-capacity equations are listed in the Methods sheet for reference but not computed. They need field length, roughness and cover.
 - "Calcareous" in the NSSH means strong or violent effervescence. The app uses CaCO₃ ≥ 5% as a proxy, because the NSSH gives no CaCO₃ threshold.
 - Coarse fragments move the group toward less erodible: one group at 15–35%, two groups at 35–60%, and I = 0 above 60%. Sands and loamy sands move fewer groups.
 
 ## 3. Wind climatology at the point (Wind tab)
 
-**Data:** hourly 10 m wind speed and direction, plus daily precipitation, FAO-56 ET₀ and daily max gust, from the Open-Meteo archive (`best_match`) for the last 5, 10 or 20 complete years, in local time.
-- For wind, `best_match` is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. I checked this against single-model requests; ERA5-Land does not supply wind here.
-- Daily max wind is taken from the hourly series.
-- A 10-year lookup costs about 180 Open-Meteo "calls" (130 at the site plus 52 at the station), against free limits of 600 per minute and 10,000 per day per IP.
+**Data:** for the last 5, 10 or 20 complete years:
+- **Hourly 10 m wind speed and direction.** You choose the gridded model on the Wind tab, and each model is the other's automatic fallback.
+  - **ECMWF (default):** the Open-Meteo archive `best_match`, which is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. ERA5-Land does not supply wind here. Daily max gust comes with it.
+  - **NASA MERRA-2:** the NASA POWER hourly API, UTC, at 0.5° × 0.625°. It has no gust variable.
+- **Daily precipitation, grass reference ET₀ (ASCE Penman–Monteith) and Tmax/Tmin:** gridMET over OPeNDAP, one 4 km cell. Scale factor, offset and fill value are read from the dataset attributes. The fallbacks are Open-Meteo daily precipitation, FAO-56 ET₀ and mean temperature, then NASA POWER daily with Hargreaves ET₀.
+- **Daily max wind** comes from the hourly series.
+- **Open-Meteo cost:** a 10-year ECMWF lookup costs about 130 Open-Meteo "calls" (78 at the site plus 52 at the station), against free limits of 600 per minute and 10,000 per day per IP. MERRA-2 uses no Open-Meteo calls.
 
 **Calibration to the nearest airport station (default):**
-- **Station data:** routine hourly METARs (2-minute mean wind at 10 m, plus gusts) from the Iowa Environmental Mesonet, for the same years.
+- **Station data:** routine hourly METARs (FM-15: 2-minute mean wind at 10 m, plus gusts) from NOAA NCEI GHCNh, one request per year. The report nearest each whole hour is kept, and NCEI quality codes 2, 3, 6 and 7 (suspect or erroneous) are dropped. Stations without a GHCNh id, or with GHCNh coverage below the threshold, use the Iowa Environmental Mesonet ASOS archive.
 - **Quality control:** sustained wind > 40 m/s or gust > 55 m/s is dropped. Hobbs, for example, has 250-kt garbled reports that otherwise dominate cubic energy sums.
 - **Station choice:** the nearest station within 150 km with data from the start year and ≥ 60% of hours. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km handicap, because in West Texas several AWOS anemometers (Seminole, Andrews, Snyder, Pecos) read 40–60% fewer erosive hours than nearby ASOS. You can pick another station in the Wind tab.
-- **Method:** monthly empirical quantile mapping. It is trained on reanalysis at the station's grid cell versus the station on the same hours, using 101 quantiles between 0.1% and 99.9%, with end ratios beyond those. It is then applied to reanalysis at the site, so the model's site-vs-station difference is kept. Daily max gusts are mapped the same way against station daily max gusts. Direction and timing stay from the reanalysis.
-- **Other sources you can select:** "Airport station only" (rain and ET₀ still from the reanalysis) and "Reanalysis only".
+- **Method:** monthly empirical quantile mapping. It is trained on the same gridded model at the station's grid cell versus the station on the same hours, using 101 quantiles between 0.1% and 99.9%, with end ratios beyond those. It is then applied to reanalysis at the site, so the model's site-vs-station difference is kept. Daily max gusts are mapped the same way against station daily max gusts; with MERRA-2, which has no gusts, the model's daily max hourly wind is mapped onto station gusts. Direction and timing stay from the model.
+- **Other sources you can select:** "Airport station only" (rain and ET₀ still from gridMET) and "Gridded model only".
 - **Check, Lubbock 2016–2025:** reanalysis vs LBB mean wind 4.41 vs 5.24 m/s, hourly r = 0.80, RMSE 1.85 m/s. Erosive hours (≥ 8 m/s) were 5.3% vs 15.1%.
   - Calibrated: 1,304 erosive h/yr vs the station's 1,321 (reanalysis 451).
   - High-risk months: Feb–May calibrated and station, Jan–Apr reanalysis.
   - Drift potential: 553 VU calibrated vs 153 VU reanalysis.
 
-**Fallback:** NASA POWER daily data (MERRA-2, ~50 km), with Hargreaves ET₀ (Ra from FAO-56 Eq. 21).
+With gridMET moisture, the Lubbock calibrated high-risk months are Feb–Apr. May falls just under the cutoff (9.3% of annual risk), because gridMET records more May rain (77 mm) than the ECMWF model did.
 
 **Erosive threshold:** 8 m/s at 10 m by default. This is the NRCS figure of 13 mph at 1 ft, or about 18 mph at 30 ft (Lyles & Krauss 1971; NAM Part 502). You can change it from 5 to 12 m/s.
 
 **Monthly metrics:**
 - Erosive hours: hours with u ≥ uₜ.
 - Erosive energy: Σ u²(u − uₜ).
-- Dryness: D = clamp((ET₀ − P)/ET₀, 0, 1).
+- Dryness: D = clamp((ET₀ − P)/ET₀, 0, 1), with P and ET₀ from gridMET. If no moisture data loads, D = 1 and months rank by wind energy alone.
 - **Risk index** = energy × D. A month's **share** is its index divided by the annual total.
   - **Red** (high risk): share ≥ 10% (vs. 8.3% if spread evenly).
   - **Amber**: share ≥ 6.7%.
   - These cut-offs are an app convention.
 
-**Gust days:** daily max gust ≥ 17.9 m/s (40 mph).
+**Gust days:** daily max gust ≥ 17.9 m/s (40 mph). Shown as n/a for uncalibrated MERRA-2.
 
 **FAO climatic index:** (1/100) Σ u₂³ · D · days. u₂ = 0.748 u₁₀ (FAO-56 Eq. 47). Months with P > ET₀ are clamped to 0.
 
@@ -112,7 +140,7 @@ Airport anemometers sit on open, mown ground, so calibrated values describe expo
 
 **Edited surface layer:** water retention, bulk density and Ksat come from Saxton & Rawls (2006), using sand and clay fractions and OM % capped at 8.
 
-**Slope and aspect** also come from the Copernicus 90 m DEM: elevation at 5 points about 100 m apart, via the Open-Meteo elevation API.
+**Slope and aspect** come from USGS 3DEP (1–10 m lidar/DEM) through the Elevation Point Query Service: elevation at 5 points about 100 m apart. slope = 100·√(gx² + gy²), aspect = atan2(−gx, −gy). Fallback: Copernicus 90 m DEM via Open-Meteo.
 
 ## 5. Recommendations (Practices tab)
 

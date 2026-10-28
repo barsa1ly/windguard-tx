@@ -70,13 +70,13 @@ WG.charts = (function () {
       data: {
         labels: MONTHS,
         datasets: [
-          { type: "line", label: "Mean daily max gust", data: a.months.map(m => +cv(m.meanDailyGust).toFixed(1)),
+          { type: "line", label: "Mean daily max gust", data: a.months.map(m => (m.meanDailyGust === null ? null : +cv(m.meanDailyGust).toFixed(1))),
             borderColor: C.red, backgroundColor: C.red, borderWidth: 2, pointRadius: 2, tension: .35, yAxisID: "y" },
           { type: "line", label: "Mean daily max wind", data: a.months.map(m => +cv(m.meanDailyMax).toFixed(1)),
             borderColor: C.orange, backgroundColor: C.orange, borderWidth: 2, pointRadius: 2, tension: .35, yAxisID: "y" },
           { type: "line", label: "Mean wind", data: a.months.map(m => +cv(m.mean).toFixed(1)),
             borderColor: C.ink, backgroundColor: C.ink, borderWidth: 2, pointRadius: 2, tension: .35, yAxisID: "y" },
-          { type: "bar", label: "Days with gusts ≥ 40 mph", data: a.months.map(m => +m.gustDays.toFixed(1)),
+          { type: "bar", label: "Days with gusts ≥ 40 mph", data: a.months.map(m => (m.gustDays === null ? null : +m.gustDays.toFixed(1))),
             backgroundColor: "rgba(200,55,45,.16)", borderRadius: 4, yAxisID: "y1" },
         ],
       },

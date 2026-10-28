@@ -634,3 +634,39 @@ table.grid td.l { text-align: left; }
 .wind-arrow { pointer-events: none; }
 .wind-arrow svg { overflow: visible; filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, .9)); }
 .mini-select { height: 30px; max-width: 60%; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; font-size: 12px; background: var(--surface); }
+
+/* methods sheet */
+.sheet.wide { width: min(1040px, calc(100% - 24px)); }
+.seg-nav { display: flex; gap: 6px; overflow-x: auto; padding: 2px 18px 10px; scrollbar-width: none; flex: none; }
+.seg-nav::-webkit-scrollbar { display: none; }
+.seg-nav button { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.seg-nav button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+#methodsBody { position: relative; }
+#methodsBody section { margin-bottom: 8px; }
+.mtable-wrap { overflow-x: auto; }
+.mtable { width: 100%; border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
+.mtable th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1.5px solid var(--line); background: var(--surface-2); }
+.mtable td { vertical-align: top; padding: 8px; border-bottom: 1px solid var(--line); }
+.mtable td:first-child { min-width: 150px; }
+.mtable.eqs td:nth-child(2) { min-width: 220px; }
+.mtable a { color: var(--blue); }
+.eq { font-family: "Cambria Math", "STIX Two Math", "Times New Roman", Georgia, serif; font-size: 14px; color: var(--ink); }
+.eq sub, .eq sup { font-size: 70%; }
+.badge { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; vertical-align: 1px; white-space: nowrap; }
+.badge.used { background: #e5f2ea; color: #23633d; }
+.badge.check { background: #e7eefb; color: #2c4f8f; }
+.badge.ref { background: #f1efe9; color: #6b6458; }
+.risk-how { margin-top: 6px; font-size: 12.5px; color: inherit; opacity: .85; text-decoration: underline; padding: 0; }
+@media (max-width: 767px) {
+  .sheet.wide { width: 100%; max-height: 92%; }
+  .mtable thead { display: none; }
+  .mtable, .mtable tbody, .mtable tr, .mtable td { display: block; width: 100%; }
+  .mtable tr { border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; margin-bottom: 8px; }
+  .mtable td { border: 0; padding: 4px 0; min-width: 0 !important; }
+  .mtable td::before { content: attr(data-label); display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  .mtable td:first-child::before { display: none; }
+  .mtable td:empty { display: none; }
+}
+@media (max-width: 767px) and (max-height: 700px) {
+  .app.has-site #methodsBtn { display: none; }
+}

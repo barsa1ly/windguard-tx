@@ -14,6 +14,7 @@
     windSets: null,      // {model, cal, station} raw series
     windStation: null,   // nearest-station data used for calibration
     windSource: "cal",   // preferred source: cal | station | model
+    gridModel: "ecmwf",  // gridded wind: ecmwf (IFS/ERA5 via Open-Meteo) | merra2 (NASA POWER)
     windKey: null,       // source actually shown
     windAll: null,       // analyses of every available source
     windCompare: null,   // reanalysis vs station statistics
@@ -175,7 +176,11 @@
   $("#opacityRange").addEventListener("input", e => { userOpacity = +e.target.value; applyOpacity(); });
   map.on("zoomend", applyOpacity);
   applyOpacity();
-  const openSheet = open => { $("#layerSheet").hidden = !open; $("#sheetBackdrop").hidden = !open; };
+  const openSheet = open => {
+    $("#layerSheet").hidden = !open;
+    $("#sheetBackdrop").hidden = !open;
+    if (!open) $("#methodsSheet").hidden = true;
+  };
   $("#layersBtn").addEventListener("click", () => { buildLayerSheet(); openSheet(true); });
   $("#sheetClose").addEventListener("click", () => openSheet(false));
   $("#sheetBackdrop").addEventListener("click", () => openSheet(false));
@@ -365,7 +370,7 @@
     const { lat, lon } = state.site;
     $("#siteName").textContent = state.place || "Selected location";
     $("#siteCoords").textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-    $("#siteElev").textContent = state.elev ? `${fmt(state.elev.z * 3.28084, 0)} ft elev · ${fmt(state.elev.slope, 1)}% slope (DEM)` : "";
+    $("#siteElev").textContent = state.elev ? `${fmt(state.elev.z * 3.28084, 0)} ft elev · ${fmt(state.elev.slope, 1)}% slope (${state.elev.src.replace(/ \d+ m.*$/, "")})` : "";
   }
 
   function resetPanels() {
@@ -394,7 +399,7 @@
 
     const jobs = [
       reverseGeocode(lat, lon).then(p => { if (live() && p && !state.place) { state.place = p; renderHeader(); } }).catch(() => {}),
-      fetchElevation(lat, lon).then(e => { if (live()) { state.elev = e; renderHeader(); renderSoilDetail(); } }).catch(() => {}),
+      fetchElevation(lat, lon).then(e => { if (live()) { state.elev = e; renderHeader(); renderSoilSummary(); renderSoilDetail(); } }).catch(() => {}),
       fetchNLCD(lat, lon).then(n => { if (live()) { state.nlcd = n; renderStats(); renderPractices(); } }).catch(() => { if (live()) { state.nlcd = { code: null }; renderStats(); } }),
       S.fetchSoil(lat, lon).then(s => {
         if (!live()) return;
@@ -410,27 +415,24 @@
     await Promise.allSettled(jobs);
   }
 
+  let windSeq = 0; // a newer period/model request supersedes an older one for the same site
   async function loadWind(tok) {
     const { lat, lon } = state.site;
-    const live = () => tok === state.token;
+    const seq = ++windSeq;
+    const live = () => tok === state.token && seq === windSeq;
     try {
-      // nearest airport station loads in parallel; the reanalysis shows first, calibration follows
+      // airport observations download in parallel; the gridded model shows first, calibration follows
       state.windStationChoice = null;
-      const stationJob = findStationRetry(lat, lon, tok);
       state.windStationPending = true;
-      let raw;
-      try {
-        raw = await Wd.fetchWind(lat, lon, state.period);
-      } catch (e) {
-        console.warn("Open-Meteo failed, falling back to NASA POWER", e);
-        raw = await Wd.fetchPower(lat, lon, state.period);
-      }
+      const stationJob = Wd.findStation(lat, lon, state.period).catch(e => { console.warn("station lookup failed", e); return null; });
+      const raw = await Wd.fetchWind(lat, lon, state.period, state.gridModel);
       if (!live()) return;
       state.windSets = { model: raw };
       state.windStation = null;
       chooseWind();
       renderWind(); renderRisk(); renderStats(); renderPractices();
-      applyStation(await stationJob, tok);
+      const st = await withModel(await stationJob, raw, live);
+      if (live()) applyStation(st, tok);
     } catch (err) {
       if (!live()) return;
       state.windStationPending = false;
@@ -439,19 +441,23 @@
     }
   }
 
-  /* Station lookup; on an Open-Meteo per-minute quota error wait a minute and try once more. */
-  async function findStationRetry(lat, lon, tok) {
+  /* Add the site's gridded model at the station to train the calibration; on an Open-Meteo per-minute
+     quota error wait a minute and try once more. Without it the station series is still usable. */
+  async function withModel(st, raw, live) {
+    if (!st) return null;
+    const get = () => Wd.fetchModelAt(raw.model, st.meta.lat, st.meta.lon, raw.start, raw.end);
     try {
-      return await Wd.findStation(lat, lon, state.period);
+      st.mod = await get();
     } catch (e) {
-      if (!/limit/i.test(e.message || "")) { console.warn("station lookup failed", e); return null; }
+      if (!/limit/i.test(e.message || "")) { console.warn("model at station failed", e); return st; }
       state.windStationRetry = true;
-      if (tok === state.token && state.windSets) renderWind();
+      if (live()) renderWind();
       await new Promise(r => setTimeout(r, 65000));
       state.windStationRetry = false;
-      if (tok !== state.token) return null;
-      return Wd.findStation(lat, lon, state.period).catch(() => null);
+      if (!live()) return null;
+      st.mod = await get().catch(() => null);
     }
+    return st;
   }
 
   function applyStation(st, tok) {
@@ -462,7 +468,7 @@
     state.windStation = st;
     if (st) {
       state.windSets.station = Wd.stationRaw(raw, st);
-      if (!raw.dailyOnly) state.windSets.cal = Wd.calibrate(raw, st);
+      if (st.mod) state.windSets.cal = Wd.calibrate(raw, st);
     }
     chooseWind();
     renderWind(); renderRisk(); renderStats(); renderPractices();
@@ -470,26 +476,28 @@
 
   /* User picked another calibration station. */
   $("#stnSel").addEventListener("change", async e => {
-    const tok = state.token, id = e.target.value;
+    const tok = state.token, seq = windSeq, id = e.target.value;
     if (!state.site || !state.windSets) return;
+    const live = () => tok === state.token && seq === windSeq;
     state.windStationChoice = id;
     state.windStationPending = true;
     renderWind();
     const st = await Wd.findStation(state.site.lat, state.site.lon, state.period, id).catch(() => null);
     if (!st) U.toast(`No usable data at ${id} for this period.`);
-    applyStation(st || state.windStation, tok);
+    const withMod = st ? await withModel(st, state.windSets.model, live) : null;
+    if (live()) applyStation(withMod || state.windStation, tok);
   });
 
   /* Pick the preferred available wind series and analyze every source for the comparison card. */
   function chooseWind() {
     const sets = state.windSets || {};
     const pref = state.windSource;
-    const key = sets[pref] ? pref : sets.cal ? "cal" : sets.station && sets.model && sets.model.dailyOnly ? "station" : "model";
+    const key = sets[pref] ? pref : sets.cal ? "cal" : "model";
     state.windKey = key;
     state.windRaw = sets[key];
     state.windAll = Object.fromEntries(Object.entries(sets).map(([k, r]) => [k, Wd.analyze(r, state.thr)]));
     state.wind = state.windAll[key];
-    state.windCompare = state.windStation ? Wd.compare(state.windStation, state.thr) : null;
+    state.windCompare = state.windStation && state.windStation.mod ? Wd.compare(state.windStation, state.thr) : null;
   }
 
   async function reverseGeocode(lat, lon) {
@@ -502,16 +510,29 @@
     return county ? `${county}, ${a.state || ""}`.replace(/, $/, "") : (j.name || null);
   }
 
+  /* Elevation, slope and aspect from 5 points ~100 m apart: USGS 3DEP (1–10 m lidar/DEM) from the Elevation
+     Point Query Service, else the Copernicus 90 m DEM via Open-Meteo. */
   async function fetchElevation(lat, lon) {
     const d = 0.0009, dl = d / Math.cos(lat * Math.PI / 180);
     const lats = [lat, lat + d, lat - d, lat, lat], lons = [lon, lon, lon, lon + dl, lon - dl];
-    const j = await U.fetchJSON(`https://api.open-meteo.com/v1/elevation?latitude=${lats.map(v => v.toFixed(5)).join(",")}&longitude=${lons.map(v => v.toFixed(5)).join(",")}`, {}, 10000);
-    const [z, zn, zs, ze, zw] = j.elevation;
+    let pts, src;
+    try {
+      const js = await Promise.all(lats.map((y, k) => U.fetchJSON(`https://epqs.nationalmap.gov/v1/json?x=${lons[k].toFixed(6)}&y=${y.toFixed(6)}&wkid=4326&units=Meters&includeDate=false`, {}, 15000)));
+      pts = js.map(j => num(j.value));
+      if (pts.some(v => v === null || v < -1000)) throw new Error("no 3DEP coverage");
+      src = `USGS 3DEP ${fmt(js[0].resolution, 0)} m`;
+    } catch (e) {
+      console.warn("USGS 3DEP unavailable, using Copernicus DEM", e);
+      const j = await U.fetchJSON(`https://api.open-meteo.com/v1/elevation?latitude=${lats.map(v => v.toFixed(5)).join(",")}&longitude=${lons.map(v => v.toFixed(5)).join(",")}`, {}, 10000);
+      pts = j.elevation;
+      src = "Copernicus 90 m DEM";
+    }
+    const [z, zn, zs, ze, zw] = pts;
     const dy = 2 * d * 111320, dx = 2 * dl * 111320 * Math.cos(lat * Math.PI / 180);
     const gx = (ze - zw) / dx, gy = (zn - zs) / dy;
     const slope = Math.hypot(gx, gy) * 100;
     const aspect = (Math.atan2(-gx, -gy) * 180 / Math.PI + 360) % 360;
-    return { z, slope, aspect };
+    return { z, slope, aspect, src };
   }
 
   const NLCD = {
@@ -520,15 +541,29 @@
     42: "Evergreen forest", 43: "Mixed forest", 52: "Shrub/scrub", 71: "Grassland/herbaceous", 81: "Pasture/hay",
     82: "Cultivated crops", 90: "Woody wetlands", 95: "Emergent herbaceous wetlands",
   };
+  /* Impact Observatory / Esri Sentinel-2 10 m classes, with the NLCD code the practice suggestions understand. */
+  const IO_LULC = { 1: ["Water", 11], 2: ["Trees", 41], 4: ["Flooded vegetation", 95], 5: ["Crops", 82], 7: ["Built area", 22],
+    8: ["Bare ground", 31], 9: ["Snow/ice", 12], 10: ["Clouds", null], 11: ["Rangeland", 71] };
+
+  /* NLCD 2021 from the MRLC WMS; MRLC currently refuses cross-site requests, so the Sentinel-2 10 m land cover
+     (Impact Observatory, Microsoft, Esri; latest year) answers instead. */
   async function fetchNLCD(lat, lon) {
-    const d = 0.0005;
-    const q = new URLSearchParams({ service: "WMS", version: "1.1.1", request: "GetFeatureInfo", layers: "NLCD_2021_Land_Cover_L48",
-      query_layers: "NLCD_2021_Land_Cover_L48", srs: "EPSG:4326", bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
-      width: "3", height: "3", x: "1", y: "1", info_format: "application/json" });
-    const j = await U.fetchJSON(`https://www.mrlc.gov/geoserver/mrlc_display/wms?${q}`, {}, 12000);
-    const f = j.features && j.features[0];
-    const code = f ? num(f.properties.PALETTE_INDEX ?? f.properties.GRAY_INDEX) : null;
-    return { code, name: NLCD[code] || null };
+    try {
+      const d = 0.0005;
+      const q = new URLSearchParams({ service: "WMS", version: "1.1.1", request: "GetFeatureInfo", layers: "NLCD_2021_Land_Cover_L48",
+        query_layers: "NLCD_2021_Land_Cover_L48", srs: "EPSG:4326", bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
+        width: "3", height: "3", x: "1", y: "1", info_format: "application/json" });
+      const j = await U.fetchJSON(`https://www.mrlc.gov/geoserver/mrlc_display/wms?${q}`, {}, 8000);
+      const f = j.features && j.features[0];
+      const code = f ? num(f.properties.PALETTE_INDEX ?? f.properties.GRAY_INDEX) : null;
+      if (NLCD[code]) return { code, name: NLCD[code], src: "nlcd" };
+    } catch (e) {
+      console.warn("NLCD unavailable, using Sentinel-2 land cover", e);
+    }
+    const g = encodeURIComponent(JSON.stringify({ x: lon, y: lat, spatialReference: { wkid: 4326 } }));
+    const j = await U.fetchJSON(`https://ic.imagery1.arcgis.com/arcgis/rest/services/Sentinel2_10m_LandCover/ImageServer/identify?geometry=${g}&geometryType=esriGeometryPoint&returnGeometry=false&returnCatalogItems=false&f=json`, {}, 12000);
+    const c = IO_LULC[num(j.value)];
+    return { code: c ? c[1] : null, name: c ? c[0] : null, src: "io" };
   }
 
   /* ============ RISK ============ */
@@ -645,9 +680,12 @@
     $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
     const stn = state.windStation && state.windStation.meta;
     const key = state.windKey;
+    const mShort = (MODEL[w.model] || MODEL.ecmwf).short;
     $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${w.start}–${w.end}`
       : key === "station" ? `${stn.id} station · ${w.start}–${w.end}`
-        : state.windStationRetry ? "model · data limit, retrying in 1 min" : state.windStationPending ? "model · calibrating…" : w.dailyOnly ? "daily (fallback)" : `model · ${w.start}–${w.end}`;
+        : state.windStationRetry ? `${mShort} · data limit, retrying in 1 min` : state.windStationPending ? `${mShort} · calibrating…` : `${mShort} · ${w.start}–${w.end}`;
+    $("#moistTag").textContent = { gridmet: "gridMET 4 km", "open-meteo": "ECMWF (fallback)", "nasa-power": "NASA POWER (fallback)" }[(w.moisture || {}).source] || "";
+    $("#modelSel").value = (state.windSets.model || {}).model || state.gridModel;
     const sel = $("#srcSel");
     const sets = state.windSets || {};
     [...sel.options].forEach(o => { o.disabled = !sets[o.value]; });
@@ -665,7 +703,7 @@
     $("#windIdx").innerHTML = [
       ["Mean wind speed (10 m)", fmtS(w.meanSpeed)],
       ["Erosive-wind hours per year", `${fmt(w.eroHours, 0)} h (${fmt(w.eroHours / 87.6, 1)}% of time)`],
-      ["Days per year with gusts ≥ 40 mph", fmt(w.gustDays, 0)],
+      ["Days per year with gusts ≥ 40 mph", w.gustDays === null ? "n/a (MERRA-2 has no gusts)" : fmt(w.gustDays, 0)],
       ["Prevailing erosive wind (from)", `${U.compass(w.prevailing)} (${fmt(w.prevailing, 0)}°)`],
       ["Resultant soil-transport direction (toward)", `${U.compass(w.rdd)} (${fmt(w.rdd, 0)}°)`],
       ["Best barrier / strip orientation", `${orientation(w)}`],
@@ -677,25 +715,68 @@
       ["Annual precipitation / ET₀", `${fmt(w.precip / 25.4, 1)} in / ${fmt(w.et0 / 25.4, 1)} in (P/ET₀ = ${fmt(w.aridity, 2)})`],
     ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("")
       + `<span class="d">${esc(sourceCaveat())}</span>`;
-    const OM = `<a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener">Open-Meteo</a>`;
-    const IEMa = `<a href="https://mesonet.agron.iastate.edu/request/download.phtml" target="_blank" rel="noopener">Iowa Environmental Mesonet</a>`;
-    const model = state.windSets && state.windSets.model;
-    const reanalysis = model && model.dailyOnly
-      ? "NASA POWER daily (MERRA-2, ~50 km)"
-      : `ECMWF IFS 9 km analysis (2017 on) and ERA5 0.25° reanalysis (before 2017) via ${OM}, grid cell ${fmt(model ? model.lat : w.gridLat, 3)}, ${fmt(model ? model.lon : w.gridLon, 3)}`;
-    $("#windSource").innerHTML = key === "cal"
-      ? `Source: hourly 10 m wind from ${reanalysis}, calibrated month by month (quantile mapping) to hourly observations at ${esc(stn.name)} (${stn.id}, ${fmt(stn.km, 0)} km away, ${fmt(stn.coverage * 100, 0)}% of hours) from the ${IEMa}. Precipitation and FAO-56 ET₀ from the reanalysis. ${yrs}.`
-      : key === "station"
-        ? `Source: hourly airport observations (2-minute mean wind at 10 m) at ${esc(stn.name)} (${stn.id}, ${fmt(stn.km, 0)} km away, ${fmt(stn.coverage * 100, 0)}% of hours) from the ${IEMa}. Precipitation and ET₀ from ${reanalysis}. ${yrs}.`
-        : `Source: hourly 10 m wind, precipitation and FAO-56 ET₀ from ${reanalysis}, ${yrs}. Not calibrated.`;
+    $("#windSource").innerHTML = `Source: ${windSourceText()} ${yrs}. <button class="link" data-methods="m-site">All sources and equations →</button>`;
   }
+
+  /* ---- provenance: what supplied each piece of data for this site ---- */
+  const A = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  const MODEL = {
+    ecmwf: { short: "ECMWF", name: "ECMWF IFS 9 km analysis (2017 on) and ERA5 0.25° reanalysis (before 2017)",
+      via: `the ${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo archive")} (a copy of the ECMWF data)` },
+    merra2: { short: "MERRA-2", name: "NASA MERRA-2 reanalysis (0.5° × 0.625°)",
+      via: `${A("https://power.larc.nasa.gov/docs/services/api/temporal/hourly/", "NASA POWER")} (direct)` },
+  };
+  const MOIST = {
+    gridmet: `gridMET 4 km (University of Idaho), read directly from its ${A("https://www.climatologylab.org/gridmet.html", "THREDDS server")}`,
+    "open-meteo": `ECMWF IFS/ERA5 via ${A("https://open-meteo.com/en/docs/historical-weather-api", "Open-Meteo")} (gridMET did not respond)`,
+    "nasa-power": `NASA POWER daily, Hargreaves ET₀ (gridMET and Open-Meteo did not respond)`,
+  };
+  const OBS = {
+    ncei: `NOAA NCEI ${A("https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly", "GHCNh")} (direct)`,
+    iem: `the ${A("https://mesonet.agron.iastate.edu/request/download.phtml", "Iowa Environmental Mesonet")} ASOS archive`,
+  };
+
+  function windSourceText() {
+    const model = state.windSets && state.windSets.model, stn = state.windStation && state.windStation.meta, key = state.windKey;
+    if (!model) return "";
+    const M = MODEL[model.model];
+    const grid = `${M.name} via ${M.via}, grid cell ${fmt(model.lat, 3)}, ${fmt(model.lon, 3)}${model.fellBack ? " (the other model did not respond)" : ""}`;
+    const stTxt = stn ? `${esc(stn.name)} (${stn.id}, ${fmt(stn.km, 0)} km away, ${fmt(stn.coverage * 100, 0)}% of hours) from ${OBS[stn.obsSource]}` : "";
+    const moist = `Precipitation, grass reference ET₀ and temperature: ${MOIST[model.moisture.source]}.`;
+    if (key === "cal") return `hourly 10 m wind from ${grid}, calibrated month by month (quantile mapping) to hourly observations at ${stTxt}. ${moist}`;
+    if (key === "station") return `hourly airport observations (2-minute mean wind at 10 m) at ${stTxt}. ${moist}`;
+    return `hourly 10 m wind from ${grid}. Not calibrated. ${moist}`;
+  }
+
+  /* Rows for the "This location" table of the Methods sheet. */
+  function siteSources() {
+    const s = state.soil, model = state.windSets && state.windSets.model, stn = state.windStation && state.windStation.meta;
+    const cf = cFactor(), e = state.elev;
+    const rows = [];
+    if (model) {
+      const M = MODEL[model.model];
+      rows.push(["Hourly wind (gridded)", `${M.name}, cell ${fmt(model.lat, 3)}, ${fmt(model.lon, 3)}`, M.via + (model.fellBack ? "; automatic fallback" : "")]);
+      rows.push(["Airport observations", stn ? `${esc(stn.name)} (${stn.id}), ${fmt(stn.km, 0)} km, ${fmt(stn.coverage * 100, 0)}% of hours` : state.windStationPending ? "loading…" : "none within 150 km", stn ? OBS[stn.obsSource] : ""]);
+      rows.push(["Wind used for results", { cal: "Calibrated to the airport", station: "Airport station only", model: "Gridded model only" }[state.windKey] || "—", ""]);
+      rows.push(["Precipitation, ET₀, temperature", `${{ gridmet: "gridMET 4 km", "open-meteo": "ECMWF IFS/ERA5", "nasa-power": "NASA POWER MERRA-2" }[model.moisture.source]}, cell ${fmt(model.moisture.lat, 3)}, ${fmt(model.moisture.lon, 3)}`, MOIST[model.moisture.source]]);
+    }
+    if (s && !s.error) rows.push(["Soil profile, WEG, I, T", `SSURGO map unit ${esc(String(s.mukey))}${s.dominant ? `, ${esc(s.dominant.compname)}` : ""} (${esc(s.mapunit.areasymbol || "")})`, `USDA-NRCS ${A("https://sdmdataaccess.nrcs.usda.gov/", "Soil Data Access")} (direct)`]);
+    if (cf) rows.push(["Climatic factor C", `${fmt(cf.C, 0)}`, cf.src.startsWith("NRCS") ? "NRCS climate-factor area in SSURGO (direct)" : "estimated from the wind series"]);
+    if (e) rows.push(["Elevation and slope", `${fmt(e.z, 0)} m, ${fmt(e.slope, 1)}% slope`, e.src.startsWith("USGS") ? `${e.src}, ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")} (direct)` : `${e.src} via Open-Meteo (USGS did not respond)`]);
+    if (state.nlcd) rows.push(["Land cover", state.nlcd.name || "no answer", state.nlcd.src === "nlcd" ? `NLCD 2021, ${A("https://www.mrlc.gov/", "MRLC")} WMS (direct)`
+      : `Sentinel-2 10 m land cover, ${A("https://livingatlas.arcgis.com/landcover/", "Impact Observatory, Microsoft, Esri")} (NLCD server refuses browser requests)`]);
+    return rows;
+  }
+  WG.siteSources = siteSources;
 
   function sourceCaveat() {
     const stn = state.windStation && state.windStation.meta;
     if (state.windKey === "cal") return `Speeds follow the measured distribution at ${stn.id} for each month; timing and direction come from the reanalysis at this point. Airport winds are measured on open ground, so sheltered sites blow less.`;
     if (state.windKey === "station") return `Measured at the ${stn.id} airport, ${fmt(stn.km, 0)} km away; local terrain and surface can differ from this field.`;
-    return state.windStationPending ? "Calibrating to the nearest airport station…"
-      : "Uncalibrated reanalysis: at Lubbock and Midland it caught only ~40–45% of erosive hours and shifted the peak months earlier. No airport station with enough data within 150 km.";
+    if (state.windStationPending) return "Calibrating to the nearest airport station…";
+    const merra = state.windSets && state.windSets.model && state.windSets.model.model === "merra2";
+    return (merra ? "Uncalibrated MERRA-2: at Lubbock it caught ~58% of the airport's erosive hours." : "Uncalibrated ECMWF: at Lubbock and Midland it caught only ~35–45% of erosive hours and shifted the peak months earlier.")
+      + (state.windStation ? "" : " No airport station with enough data within 150 km.");
   }
 
   function renderCalibration() {
@@ -761,6 +842,13 @@
     $("#windSrcTag").textContent = "loading…";
     loadWind(state.token);
   });
+  $("#modelSel").addEventListener("change", e => {
+    state.gridModel = e.target.value;
+    if (!state.site) return;
+    state.wind = null;
+    $("#windSrcTag").textContent = "loading…";
+    loadWind(state.token);
+  });
 
   /* ============ SOIL TAB ============ */
   function renderSoil() {
@@ -812,7 +900,8 @@
     $("#soilSummary").innerHTML = html;
     $("#ovSoil").innerHTML = `<div class="nm">${esc(d.compname)} ${tex ? "· " + esc(tex) : ""}</div><div class="sub">${esc(s.mapunit.muname || "")}</div><div class="chips">${chips}</div>`;
     $("#soilSrcTag").textContent = `SSURGO · ${s.mapunit.areasymbol || ""}`;
-    $("#soilSource").innerHTML = `Source: USDA-NRCS Soil Survey Geographic Database (SSURGO) via <a href="https://sdmdataaccess.nrcs.usda.gov/" target="_blank" rel="noopener">Soil Data Access</a>, map unit key ${s.mukey}, ${esc(s.mapunit.areaname || "")}${s.mapunit.saverest ? `, survey dated ${esc(String(s.mapunit.saverest).slice(0, 10))}` : ""}. Elevation/slope: Copernicus 90 m DEM via Open-Meteo. Water retention for edited layers: Saxton &amp; Rawls (2006).`;
+    const e = state.elev;
+    $("#soilSource").innerHTML = `Source: USDA-NRCS Soil Survey Geographic Database (SSURGO) via <a href="https://sdmdataaccess.nrcs.usda.gov/" target="_blank" rel="noopener">Soil Data Access</a>, map unit key ${s.mukey}, ${esc(s.mapunit.areaname || "")}${s.mapunit.saverest ? `, survey dated ${esc(String(s.mapunit.saverest).slice(0, 10))}` : ""}. Elevation/slope: ${e ? esc(e.src) + (e.src.startsWith("USGS") ? " (Elevation Point Query Service)" : " via Open-Meteo") : "loading"}. Water retention for edited layers: Saxton &amp; Rawls (2006). <button class="link" data-methods="m-erod">Equations →</button>`;
     renderDerived();
   }
 
@@ -839,8 +928,13 @@
       ["Plant-available water", sr ? `${fmt(sr.awc * 12, 2)} in/ft` : "—", ""],
       ["Sat. conductivity", sr && sr.ksat !== null ? `${fmt(sr.ksat / 25.4, 2)} in/h` : "—", ""],
     ];
+    const rw = S.rweq(surf), rw0 = S.rweq(base);
+    if (rw) cells.push(
+      ["RWEQ erodible fraction EF", `${fmt(rw.ef * 100, 0)}% < 0.84 mm${rw.inRange ? "" : " *"}`, ch(rw.ef.toFixed(3), rw0 && rw0.ef.toFixed(3))],
+      ["RWEQ crust factor SCF", `${fmt(rw.scf, 2)}${rw.inRange ? "" : " *"}`, ch(rw.scf.toFixed(3), rw0 && rw0.scf.toFixed(3))]);
     $("#soilDerived").innerHTML = cells.map(([k, v, c]) => `<div><span>${esc(k)}</span><b class="${c}">${esc(v)}</b></div>`).join("")
-      + (surf.calc ? `<div style="grid-column:1/-1"><span>WEG rule applied</span><b>${esc(surf.calc.why)}</b></div>` : "");
+      + (surf.calc ? `<div style="grid-column:1/-1"><span>WEG rule applied</span><b>${esc(surf.calc.why)}</b></div>` : "")
+      + (rw && !rw.inRange ? `<div style="grid-column:1/-1"><span>* RWEQ check</span><b>This soil is outside the range of soils the RWEQ equations were fitted to; read EF and SCF as rough.</b></div>` : "");
   }
 
   function onSoilEdit(e) {
@@ -903,7 +997,7 @@
       P("Soil order", esc(d.taxorder || "—")), P("Great group", esc(d.taxgrtgroup || "—")), P("Subgroup", esc(d.taxsubgrp || "—")),
       P("Particle-size class", esc(d.taxpartsize || "—")), P("Temperature regime", esc(d.taxtempregime || "—")), P("Moisture subclass", esc(d.taxmoistscl || "—")),
       P("Slope (survey)", site.slope !== null ? `${fmt(site.slope, 1)}% (${f(site.slopeRange[0], 0)}–${f(site.slopeRange[1], 0)})` : "—"),
-      P("Slope (90 m DEM)", e ? `${fmt(e.slope, 1)}%, facing ${U.compass(e.aspect)}` : "—"),
+      P("Slope (DEM, ±100 m)", e ? `${fmt(e.slope, 1)}%, facing ${U.compass(e.aspect)} · ${esc(e.src)}` : "—"),
       P("Elevation", e ? `${fmt(e.z, 0)} m (${fmt(e.z * 3.28084, 0)} ft)` : (d.elev_r ? `${fmt(d.elev_r, 0)} m` : "—")),
       P("Soil depth", site.depth ? `${fmt(site.depth, 0)} cm` : "—"),
       P("Restrictive layer", site.restriction ? `${esc(site.restriction.kind)} at ${fmt(site.restriction.depth, 0)} cm` : "none reported"),

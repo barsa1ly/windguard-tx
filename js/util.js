@@ -45,6 +45,28 @@ WG.util = (function () {
     }
   }
 
+  async function fetchText(url, timeoutMs = 45000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      return await r.text();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /* Map items through an async fn with at most n requests in flight; results keep input order. */
+  async function pool(items, n, fn) {
+    const out = new Array(items.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+      while (next < items.length) { const k = next++; out[k] = await fn(items[k], k); }
+    }));
+    return out;
+  }
+
   function debounce(fn, ms) {
     let t;
     return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -131,6 +153,6 @@ WG.util = (function () {
     },
   };
 
-  return { MONTHS, MONTHS_LONG, COMPASS, $, $$, esc, num, fmt, clamp, msToMph, compass, fetchJSON, debounce,
+  return { MONTHS, MONTHS_LONG, COMPASS, $, $$, esc, num, fmt, clamp, msToMph, compass, fetchJSON, fetchText, pool, debounce,
     parseCoords, toast, download, linreg, cache };
 })();
