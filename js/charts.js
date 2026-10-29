@@ -212,9 +212,9 @@ WG.charts = (function () {
   }
 
   /* Monthly erosive hours by source: airport station, raw reanalysis, calibrated. */
-  function calib(all) {
+  function calib(all, stationLabel) {
     const ds = [];
-    if (all.station) ds.push({ type: "bar", label: "Airport station", data: all.station.months.map(m => +m.eroHours.toFixed(1)), backgroundColor: "rgba(47,111,159,.35)", borderRadius: 4, order: 3 });
+    if (all.station) ds.push({ type: "bar", label: stationLabel || "Airport station", data: all.station.months.map(m => +m.eroHours.toFixed(1)), backgroundColor: "rgba(47,111,159,.35)", borderRadius: 4, order: 3 });
     if (all.cal) ds.push({ type: "line", label: "Calibrated (this point)", data: all.cal.months.map(m => +m.eroHours.toFixed(1)), borderColor: C.red, backgroundColor: C.red, borderWidth: 2.5, pointRadius: 2.5, tension: .3, order: 1 });
     if (all.model) ds.push({ type: "line", label: "Reanalysis only", data: all.model.months.map(m => +m.eroHours.toFixed(1)), borderColor: C.muted, backgroundColor: C.muted, borderDash: [5, 4], borderWidth: 2, pointRadius: 0, tension: .3, order: 2 });
     draw("chCal", {

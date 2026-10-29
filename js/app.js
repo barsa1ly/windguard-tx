@@ -12,7 +12,10 @@
     edits: null,         // user surface overrides {sand, silt, clay, om, caco3, ph}
     windRaw: null,
     windSets: null,      // {model, cal, station} raw series
-    windStation: null,   // nearest-station data used for calibration
+    windStation: null,   // station data used for calibration: an airport, or a West Texas Mesonet tower when on
+    windAirport: null,   // airport data: gusts for a tower calibration and the "station only" series
+    windTower: null,     // tower that ranks ahead of every airport, while its records load
+    windSkipped: [],     // towers read but not used: they read low against the airport (probably sheltered)
     windSource: "cal",   // preferred source: cal | station | model
     gridModel: "merra2", // gridded wind: merra2 (NASA POWER, direct) | ecmwf (IFS/ERA5 via Open-Meteo, the backup)
     windKey: null,       // source actually shown
@@ -29,6 +32,7 @@
     answers: {},
   };
   WG.state = state;
+  const KEEP_Q = Wd.wtmTrial ? "&wtm=1" : ""; // a local mesonet test survives a reload (the public site ignores ?wtm=1)
 
   /* ============ MAP ============ */
   const map = L.map("map", { zoomControl: false, preferCanvas: true, worldCopyJump: false, tap: true })
@@ -432,7 +436,7 @@
     }
     state.site = { lat, lon };
     state.token++;
-    state.soil = null; state.edits = null; state.wind = null; state.windRaw = null; state.windSets = null; state.windStation = null; state.nlcd = null; state.elev = null;
+    state.soil = null; state.edits = null; state.wind = null; state.windRaw = null; state.windSets = null; state.windStation = null; state.windAirport = null; state.windTower = null; state.windSkipped = []; state.nlcd = null; state.elev = null;
     state.place = opts.place || null;
 
     const ll = L.latLng(lat, lon);
@@ -446,7 +450,7 @@
     if (wasOpen) map.setView(ll, z, { animate: true });
     else { pendingView = { ll, z }; setLayout("split"); }
 
-    try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}`); } catch (e) { /* file:// */ }
+    try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}${KEEP_Q}`); } catch (e) { /* file:// */ }
     renderHeader();
     resetPanels();
     showTab("overview");
@@ -508,37 +512,74 @@
     await Promise.allSettled(jobs);
   }
 
-  let windSeq = 0; // a newer period/model request supersedes an older one for the same site
+  let windSeq = 0, stnSeq = 0; // a newer period/model request supersedes an older one; a newer station pick an older pick
   async function loadWind(tok) {
     const { lat, lon } = state.site;
     const seq = ++windSeq;
+    stnSeq++;
     const live = () => tok === state.token && seq === windSeq;
+    let failed = false;
+    const towerLive = () => !failed && live() && !state.windStationChoice; // a pick, a newer load or a failed load stops the tower read
     try {
-      // airport observations download in parallel; the gridded model shows first, calibration follows
+      // airport observations download in parallel; the gridded model shows first, calibration follows. A West Texas
+      // Mesonet tower that ranks ahead of every airport (mesonet on) loads alongside and replaces the airport's speed
+      // calibration if it passes the exposure check; gusts stay with the airport.
       state.windStationChoice = null;
       state.windStationPending = true;
+      state.windTower = Wd.towerFirst(lat, lon, state.period);
+      const tried = []; // every tower read, so a second try never reads one again
+      const onTry = s => { tried.push(s.id); if (towerLive()) { state.windTower = s; renderWind(); } };
       const stationJob = Wd.findStation(lat, lon, state.period).catch(e => { console.warn("station lookup failed", e); return null; });
+      let job = state.windTower ? Wd.findStation(lat, lon, state.period, null, { towers: true, live: towerLive, onTry })
+        .catch(e => { console.warn("tower lookup failed", e); return null; }) : null;
       const raw = await Wd.fetchWind(lat, lon, state.period, state.gridModel);
       if (!live()) return;
       state.windSets = { model: raw };
       state.windStation = null;
+      state.windAirport = null; // reset with the sets: the old "station only" series and its airport go together
+      state.windSkipped = [];
       chooseWind();
       renderWind(); renderRisk(); renderStats(); renderPractices();
       const st = await withModel(await stationJob, raw, live);
-      if (live()) applyStation(st, tok);
+      if (!live()) return;
+      applyStation(st, tok);
+      // a tower is used if it passes the exposure check against the airport, or unchecked when no airport was found.
+      // One that reads low (probably sheltered) or cannot be compared is skipped: one more is checked, then the airport stays.
+      while (job) {
+        const tw = await withModel(await job, raw, towerLive);
+        if (!towerLive()) return;
+        if (!tw || !tw.mod) break;
+        const x = towerExposure(tw);
+        if (x ? x.ero >= Wd.EXPOSURE_MIN : !state.windAirport) { state.windTower = null; applyStation(tw, tok); return; }
+        state.windSkipped.push(tw.meta);
+        job = state.windSkipped.length < 2 && Wd.towerFirst(lat, lon, state.period, tried)
+          ? Wd.findStation(lat, lon, state.period, null, { towers: true, live: towerLive, skip: tried, onTry }).catch(() => null) : null;
+      }
+      state.windTower = null;
+      renderWind(); renderStats(); // no usable tower: the airport calibration stays
     } catch (err) {
+      failed = true;
       if (!live()) return;
       state.windStationPending = false;
+      state.windTower = null;
       state.wind = { error: err.message || String(err) };
       renderWind(); renderRisk(); renderStats();
     }
+  }
+
+  /* Tower vs the current airport, each relative to the model: {mean, ero} ratios, null without an airport. */
+  function towerExposure(tw) {
+    const ap = state.windAirport;
+    tw.meta.exposure = ap && ap.mod ? Wd.exposure(tw, ap) : null;
+    tw.meta.expAp = ap ? ap.meta.id : null;
+    return tw.meta.exposure;
   }
 
   /* Add the site's gridded model at the station to train the calibration; on an Open-Meteo per-minute
      quota error wait a minute and try once more. Without it the station series is still usable. */
   async function withModel(st, raw, live) {
     if (!st) return null;
-    const get = () => Wd.fetchModelAt(raw.model, st.meta.lat, st.meta.lon, raw.start, raw.end);
+    const get = () => Wd.fetchModelAt(raw.model, st.meta.lat, st.meta.lon, st.meta.y0, st.meta.y1);
     try {
       st.mod = await get();
     } catch (e) {
@@ -559,26 +600,30 @@
     const raw = state.windSets.model;
     state.windSets = { model: raw };
     state.windStation = st;
-    if (st) {
-      state.windSets.station = Wd.stationRaw(raw, st);
-      if (st.mod) state.windSets.cal = Wd.calibrate(raw, st);
-    }
+    if (st && !st.meta.tower) state.windAirport = st;
+    const ap = state.windAirport;
+    if (ap) state.windSets.station = Wd.stationRaw(raw, ap); // "station only" is always an airport (towers cover only their latest years)
+    if (st && st.mod) state.windSets.cal = Wd.calibrate(raw, st, st.meta.tower ? ap : st);
     chooseWind();
     renderWind(); renderRisk(); renderStats(); renderPractices();
   }
 
-  /* User picked another calibration station. */
+  /* User picked another calibration station; a newer pick or a new load supersedes it (and stops a tower read). */
   $("#stnSel").addEventListener("change", async e => {
-    const tok = state.token, seq = windSeq, id = e.target.value;
+    const tok = state.token, seq = windSeq, my = ++stnSeq, id = e.target.value;
     if (!state.site || !state.windSets) return;
-    const live = () => tok === state.token && seq === windSeq;
+    const live = () => tok === state.token && seq === windSeq && my === stnSeq;
     state.windStationChoice = id;
     state.windStationPending = true;
+    state.windTower = null;
     renderWind();
-    const st = await Wd.findStation(state.site.lat, state.site.lon, state.period, id).catch(() => null);
+    const st = await Wd.findStation(state.site.lat, state.site.lon, state.period, id, { live }).catch(() => null);
+    if (!live()) return;
     if (!st) U.toast(`No usable data at ${id} for this period.`);
     const withMod = st ? await withModel(st, state.windSets.model, live) : null;
-    if (live()) applyStation(withMod || state.windStation, tok);
+    if (!live()) return;
+    if (withMod && withMod.meta.tower && withMod.mod) towerExposure(withMod); // shown, not enforced: the user chose it
+    applyStation(withMod || state.windStation, tok);
   });
 
   /* Pick the preferred available wind series and analyze every source for the comparison card. */
@@ -786,9 +831,9 @@
       $("#stDir").innerHTML = `${U.compass(w.prevailing)} <small>from ${fmt(w.prevailing, 0)}°</small>`;
       $("#stDirS").textContent = "where most soil-moving wind comes from";
       $("#monthStrip").innerHTML = w.months.map((m, i) => `<div class="m ${m.level}" title="${U.MONTHS_LONG[i]}: ${(m.share * 100).toFixed(0)}% of annual risk"><i></i>${U.MONTHS[i][0]}</div>`).join("");
-      const stn = state.windStation && state.windStation.meta;
-      const via = state.windKey === "cal" ? ` Wind calibrated to ${stn.name.replace(/,.*$/, "")} (${stn.id}) airport records.`
-        : state.windKey === "station" ? ` From ${stn.id} airport records.` : state.windStationPending ? " Calibrating to the nearest airport…" : " Uncalibrated reanalysis.";
+      const stn = state.windStation && state.windStation.meta, ap = airportMeta();
+      const via = state.windKey === "cal" ? ` Wind calibrated to ${stn.name.replace(/,.*$/, "")} (${stn.id}) ${stn.tower ? "mesonet tower" : "airport"} records.`
+        : state.windKey === "station" ? ` From ${ap.id} airport records.` : state.windStationPending ? " Calibrating to the nearest airport…" : " Uncalibrated reanalysis.";
       $("#monthStripNote").textContent = (w.riskMonths.length
         ? `High-risk: ${monthsText(w.riskMonths)}. Red months carry ≥ 10% of the year's erosive wind energy under dry conditions — keep the soil covered or rough then.`
         : "Erosive wind is spread evenly across the year here.") + via;
@@ -824,11 +869,12 @@
       return;
     }
     $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
-    const stn = state.windStation && state.windStation.meta;
+    const stn = state.windStation && state.windStation.meta, ap = airportMeta();
     const key = state.windKey;
     const mShort = (MODEL[w.model] || MODEL.merra2).short;
-    $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${w.start}–${w.end}`
-      : key === "station" ? `${stn.id} station · ${w.start}–${w.end}`
+    const busy = state.windTower ? ` · reading ${state.windTower.id} tower…` : state.windStationPending && state.windStationChoice ? ` · loading ${state.windStationChoice}…` : "";
+    $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${w.start}–${w.end}${busy}`
+      : key === "station" ? `${ap.id} station · ${w.start}–${w.end}${busy}`
         : state.windStationRetry ? `${mShort} · data limit, retrying in 1 min` : state.windStationPending ? `${mShort} · calibrating…` : `${mShort} · ${w.start}–${w.end}`;
     $("#moistTag").textContent = { gridmet: "gridMET 4 km", "nasa-power": "NASA POWER (fallback)", "open-meteo": "Open-Meteo (fallback)" }[(w.moisture || {}).source] || "";
     $("#modelSel").value = (state.windSets.model || {}).model || state.gridModel;
@@ -849,7 +895,8 @@
     $("#windIdx").innerHTML = [
       ["Mean wind speed (10 m)", fmtS(w.meanSpeed)],
       ["Erosive-wind hours per year", `${fmt(w.eroHours, 0)} h (${fmt(w.eroHours / 87.6, 1)}% of time)`],
-      ["Days per year with gusts ≥ 40 mph", w.gustDays === null ? "n/a (MERRA-2 has no gusts)" : fmt(w.gustDays, 0)],
+      ["Days per year with gusts ≥ 40 mph", w.gustDays !== null ? fmt(w.gustDays, 0)
+        : key === "cal" ? "n/a (the tower records no gusts and no airport could supply them)" : "n/a (MERRA-2 has no gusts)"],
       ["Prevailing erosive wind (from)", `${U.compass(w.prevailing)} (${fmt(w.prevailing, 0)}°)`],
       ["Resultant soil-transport direction (toward)", `${U.compass(w.rdd)} (${fmt(w.rdd, 0)}°)`],
       ["Best barrier / strip orientation", `${orientation(w)}`],
@@ -880,17 +927,28 @@
   const OBS = {
     ncei: `NOAA NCEI ${A("https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly", "GHCNh")} (direct)`,
     iem: `the ${A("https://mesonet.agron.iastate.edu/request/download.phtml", "Iowa Environmental Mesonet")} ASOS archive`,
+    iemhads: `NWS Lubbock's hourly SHEF reports, archived by the ${A("https://mesonet.agron.iastate.edu/request/dcp/fe.phtml", "Iowa Environmental Mesonet")}`,
   };
+  const WTM = A("https://www.mesonet.ttu.edu/", "West Texas Mesonet");
+  // the airport behind "Airport station only" (the calibration station if no airport is recorded)
+  const airportMeta = () => (state.windAirport || state.windStation || {}).meta;
+  // "Lubbock Intl Airport, TX (LBB, 21 km away, 99% of hours)"; towers add their years and network
+  const stationTxt = s => `${esc(s.name)} (${s.id}, ${fmt(s.km, 0)} km away, ${fmt(s.coverage * 100, 0)}% of hours${s.tower ? ` ${s.y0}–${s.y1}` : ""})`
+    + `${s.tower ? `, a ${WTM} 10 m tower (Texas Tech),` : ""} from ${OBS[s.obsSource]}`;
 
   function windSourceText() {
     const model = state.windSets && state.windSets.model, stn = state.windStation && state.windStation.meta, key = state.windKey;
+    const ap = airportMeta();
     if (!model) return "";
     const M = MODEL[model.model];
     const grid = `${M.name} via ${M.via}, grid cell ${fmt(model.lat, 3)}, ${fmt(model.lon, 3)}${model.fellBack ? " (the other model did not respond)" : ""}`;
-    const stTxt = stn ? `${esc(stn.name)} (${stn.id}, ${fmt(stn.km, 0)} km away, ${fmt(stn.coverage * 100, 0)}% of hours) from ${OBS[stn.obsSource]}` : "";
     const moist = `Precipitation, grass reference ET₀ and temperature: ${MOIST[model.moisture.source]}.`;
-    if (key === "cal") return `hourly 10 m wind from ${grid}, calibrated month by month (quantile mapping) to hourly observations at ${stTxt}. ${moist}`;
-    if (key === "station") return `hourly airport observations (2-minute mean wind at 10 m) at ${stTxt}. ${moist}`;
+    if (key === "cal") {
+      const g = state.windRaw.gustStation;
+      const gust = !stn.tower ? "" : g ? `; daily gusts calibrated to ${esc(g.name)} (${g.id}, ${fmt(g.km, 0)} km away), because the tower records no gusts` : "; no gusts (the tower records none and no airport could supply them)";
+      return `hourly 10 m wind from ${grid}, calibrated month by month (quantile mapping) to hourly observations at ${stationTxt(stn)}${gust}. ${moist}`;
+    }
+    if (key === "station") return `hourly airport observations (2-minute mean wind at 10 m) at ${stationTxt(ap)}. ${moist}`;
     return `hourly 10 m wind from ${grid}. Not calibrated. ${moist}`;
   }
 
@@ -902,8 +960,13 @@
     if (model) {
       const M = MODEL[model.model];
       rows.push(["Hourly wind (gridded)", `${M.name}, cell ${fmt(model.lat, 3)}, ${fmt(model.lon, 3)}`, M.via + (model.fellBack ? "; automatic fallback" : "")]);
-      rows.push(["Airport observations", stn ? `${esc(stn.name)} (${stn.id}), ${fmt(stn.km, 0)} km, ${fmt(stn.coverage * 100, 0)}% of hours` : state.windStationPending ? "loading…" : "none within 150 km", stn ? OBS[stn.obsSource] : ""]);
-      rows.push(["Wind used for results", { cal: "Calibrated to the airport", station: "Airport station only", model: "Gridded model only" }[state.windKey] || "—", ""]);
+      const ap = state.windAirport && state.windAirport.meta, tw = stn && stn.tower ? stn : null;
+      rows.push(["Airport observations", ap ? `${esc(ap.name)} (${ap.id}), ${fmt(ap.km, 0)} km, ${fmt(ap.coverage * 100, 0)}% of hours` : state.windStationPending ? "loading…" : "none within 150 km", ap ? OBS[ap.obsSource] : ""]);
+      if (tw || state.windTower) rows.push(["West Texas Mesonet tower", tw ? `${esc(tw.name)} (${tw.id}), ${fmt(tw.km, 0)} km, ${fmt(tw.coverage * 100, 0)}% of hours ${tw.y0}–${tw.y1}; ${checkTxt(tw)}` : "loading…",
+        tw ? `${OBS[tw.obsSource]}; ${WTM} data policy: public use needs the mesonet's permission` : ""]);
+      const skipped = state.windSkipped.filter(s => !stn || s.id !== stn.id), g = (state.windSets.cal || {}).gustStation;
+      if (skipped.length) rows.push(["Towers not used", skipped.map(s => `${esc(s.name)} (${s.id}), ${fmt(s.km, 0)} km: ${skipTxt(s)}`).join("; "), "exposure check"]);
+      rows.push(["Wind used for results", { cal: tw ? (g ? `Calibrated to the tower (gusts to ${g.id})` : "Calibrated to the tower (no gusts)") : "Calibrated to the airport", station: "Airport station only", model: "Gridded model only" }[state.windKey] || "—", ""]);
       rows.push(["Precipitation, ET₀, temperature", `${{ gridmet: "gridMET 4 km", "open-meteo": "ECMWF IFS/ERA5", "nasa-power": "NASA POWER MERRA-2" }[model.moisture.source]}, cell ${fmt(model.moisture.lat, 3)}, ${fmt(model.moisture.lon, 3)}`, MOIST[model.moisture.source]]);
     }
     if (s && !s.error) rows.push(["Soil profile, WEG, I, T", `SSURGO map unit ${esc(String(s.mukey))}${s.dominant ? `, ${esc(s.dominant.compname)}` : ""} (${esc(s.mapunit.areasymbol || "")})`, `USDA-NRCS ${A("https://sdmdataaccess.nrcs.usda.gov/", "Soil Data Access")} (direct)`]);
@@ -918,8 +981,13 @@
 
   function sourceCaveat() {
     const stn = state.windStation && state.windStation.meta;
-    if (state.windKey === "cal") return `Speeds follow the measured distribution at ${stn.id} for each month; timing and direction come from the reanalysis at this point. Airport winds are measured on open ground, so sheltered sites blow less.`;
-    if (state.windKey === "station") return `Measured at the ${stn.id} airport, ${fmt(stn.km, 0)} km away; local terrain and surface can differ from this field.`;
+    const ap = airportMeta(), x = stn && stn.tower && stn.exposure;
+    const ground = !stn || !stn.tower ? "Airport winds are measured on open ground, so sheltered sites blow less."
+      : !x ? "The tower was not checked against an airport, and sheltered towers read low."
+        : x.ero < Wd.EXPOSURE_MIN ? "This tower reads low against the airport and may be sheltered, so these values may be low."
+          : "The tower reads like the airport, on open ground, so sheltered sites blow less.";
+    if (state.windKey === "cal") return `Speeds follow the measured distribution at ${stn.id} for each month; timing and direction come from the reanalysis at this point. ${ground}`;
+    if (state.windKey === "station") return `Measured at the ${ap.id} airport, ${fmt(ap.km, 0)} km away; local terrain and surface can differ from this field.`;
     if (state.windStationPending) return "Calibrating to the nearest airport station…";
     const merra = state.windSets && state.windSets.model && state.windSets.model.model === "merra2";
     return (merra ? "Uncalibrated MERRA-2: at Lubbock it caught ~58% of the airport's erosive hours." : "Uncalibrated ECMWF: at Lubbock and Midland it caught only ~35–45% of erosive hours and shifted the peak months earlier.")
@@ -929,27 +997,43 @@
   function renderCalibration() {
     const card = $("#calCard");
     const c = state.windCompare, st = state.windStation, all = state.windAll || {};
+    const tw = state.windTower;
     if (!st || !c) {
-      card.hidden = !state.windStationPending;
-      $("#calKv").innerHTML = `<span class="k">Looking for the nearest airport station…</span><span class="v"></span>`;
+      card.hidden = !state.windStationPending && !tw;
+      $("#calKv").innerHTML = `<span class="k">${tw && !state.windStationPending ? `Reading the ${esc(tw.id)} mesonet tower…` : "Looking for the nearest airport station…"}</span><span class="v"></span>`;
       return;
     }
     card.hidden = false;
-    const m = st.meta;
-    const cands = Wd.nearestStations(state.site.lat, state.site.lon, Wd.yearsFor(state.period).start);
-    $("#stnSel").innerHTML = cands.map(c => `<option value="${esc(c.id)}" ${c.id === m.id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name.replace(/,.*$/, ""))} · ${fmt(c.km, 0)} km${c.awos ? " · AWOS" : ""}</option>`).join("");
+    const m = st.meta, ap = state.windAirport && state.windAirport.meta, g = (state.windSets.cal || {}).gustStation;
+    const skipped = state.windSkipped.filter(s => s.id !== m.id); // a skipped tower the user then picked is the station
+    const cands = Wd.nearestStations(state.site.lat, state.site.lon, state.period);
+    const want = state.windStationPending && state.windStationChoice ? cands.find(c => c.id === state.windStationChoice) : null; // picked, still loading
+    $("#stnSel").innerHTML = cands.map(c => `<option value="${esc(c.id)}" ${c.id === (want || m).id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name.replace(/,.*$/, ""))} · ${fmt(c.km, 0)} km${c.awos ? " · AWOS" : c.tower ? " · mesonet tower" : ""}</option>`).join("");
     const sp = v => state.units === "mph" ? `${fmt(U.msToMph(v), 1)} mph` : `${fmt(v, 2)} m/s`;
     const tm = a => a ? WG.monthsText(a.riskMonths) || "—" : "—";
     $("#calKv").innerHTML = [
-      ["Station", `${m.name} (${m.id}${m.awos ? ", AWOS" : ""})`],
-      ["Distance · data coverage", `${fmt(m.km, 0)} km · ${fmt(m.coverage * 100, 0)}% of hours`],
+      ["Station", `${m.name} (${m.id}${m.awos ? ", AWOS" : ""})${m.tower ? " · West Texas Mesonet 10 m tower" : ""}`],
+      ["Distance · data coverage", `${fmt(m.km, 0)} km · ${fmt(m.coverage * 100, 0)}% of hours${m.tower ? `, ${m.y0}–${m.y1}` : ""}`],
+      ...(m.tower ? [["Gusts", g ? `from ${g.name.replace(/,.*$/, "")} (${g.id}), ${fmt(g.km, 0)} km: the tower records none`
+        : ap ? `none: the tower records none and ${ap.id} has no model series to map them` : "none: the tower records none and no airport within 150 km has them"]] : []),
+      ...(m.tower ? [["Exposure vs airport", checkTxt(m)]] : []),
+      ...(skipped.length ? [["Towers not used", skipped.map(s => `${s.id}, ${fmt(s.km, 0)} km: ${skipTxt(s)}`).join("; ")]] : []),
+      ...(tw ? [["Mesonet tower ranked ahead", `${tw.id}, ${fmt(tw.km, 0)} km: reading its last ${Wd.TOWER_YEARS} years (about a minute)`]] : []),
+      ...(want ? [["Loading", `${want.id}, ${fmt(want.km, 0)} km${want.tower ? `: reading its last ${Wd.TOWER_YEARS} years (about a minute)` : "…"}`]] : []),
       ["Mean wind: station vs model", `${sp(c.meanObs)} vs ${sp(c.meanMod)} (${c.bias >= 0 ? "+" : ""}${fmt((c.bias / c.meanObs) * 100, 0)}%)`],
       ["Hourly agreement", `r = ${fmt(c.r, 2)}, RMSE ${sp(c.rmse)}`],
       ["Erosive hours caught by model", `${fmt((c.freqMod / Math.max(c.freqObs, 1e-9)) * 100, 0)}% (${fmt(c.freqMod * 100, 1)}% vs ${fmt(c.freqObs * 100, 1)}% of hours)`],
-      ["High-risk months: station / model / calibrated", `${tm(all.station)} / ${tm(all.model)} / ${tm(all.cal)}`],
+      [`High-risk months: ${ap ? `${ap.id} airport` : "station"} / model / calibrated`, `${tm(all.station)} / ${tm(all.model)} / ${tm(all.cal)}`],
     ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("");
-    if (!$("#tab-wind").hidden) Ch.calib(all);
+    if (!$("#tab-wind").hidden) Ch.calib(all, ap && `${ap.id} airport`);
   }
+
+  const pctOff = x => `${x >= 1 ? "+" : "−"}${fmt(Math.abs(x - 1) * 100, 0)}%`; // 0.79 -> "−21%"
+  // "−49% erosive hours, −21% mean wind against LBB, relative to the model"
+  const expTxt = s => `${pctOff(s.exposure.ero)} erosive hours, ${pctOff(s.exposure.mean)} mean wind against ${s.expAp}, relative to the model`;
+  const checkTxt = s => s.exposure ? `${expTxt(s)}${s.exposure.ero < Wd.EXPOSURE_MIN ? ": reads low, probably sheltered" : ""}`
+    : s.expAp ? `not checked: could not be compared with ${s.expAp}` : "not checked: no airport within 150 km";
+  const skipTxt = s => s.exposure ? `${expTxt(s)} (probably sheltered)` : `could not be compared with ${s.expAp}`;
 
   function orientation(w) {
     // barriers/strips should run perpendicular to the prevailing erosive wind
@@ -967,7 +1051,7 @@
     Ch.water(w);
     Ch.trend(w);
     Ch.rose($("#roseBox"), w, state.units);
-    if (state.windAll && state.windAll.station) Ch.calib(state.windAll);
+    if (state.windAll && (state.windAll.station || state.windCompare)) Ch.calib(state.windAll, state.windAirport && `${state.windAirport.meta.id} airport`);
     const tot = w.rose.reduce((a, r) => a + r.bins.reduce((x, y) => x + y, 0), 0);
     $("#roseNote").textContent = `Erosive winds blow ${fmt(tot, 1)}% of the time, mostly from the ${U.compass(w.prevailing)}. Soil moves toward the ${U.compass(w.rdd)}.`;
   }

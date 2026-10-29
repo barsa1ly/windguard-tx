@@ -3,8 +3,9 @@
      Open-Meteo when NASA fails or is chosen (ECMWF and the Copernicus CDS need an account key and queued jobs);
    - daily precipitation, grass reference ET and temperature: gridMET 4 km from the University of Idaho THREDDS server,
      then NASA POWER daily (Penman–Monteith ET0 computed here), then Open-Meteo;
-   - airport observations: NOAA NCEI GHCNh (official archive), else the Iowa Environmental Mesonet ASOS archive.
-   The gridded wind is calibrated to the nearest airport station, then analyzed for erosive wind climate. */
+   - airport observations: NOAA NCEI GHCNh (official archive), else the Iowa Environmental Mesonet ASOS archive;
+   - West Texas Mesonet 10 m towers (off unless switched on): NWS SHEF reports in the Iowa Environmental Mesonet DCP archive.
+   The gridded wind is calibrated to the nearest station, then analyzed for erosive wind climate. */
 WG.wind = (function () {
   const { fetchJSON, fetchText, pool, linreg } = WG.util;
   const ARCHIVE = "https://archive-api.open-meteo.com/v1/archive";
@@ -323,12 +324,25 @@ WG.wind = (function () {
     };
   }
 
-  /* ------------ nearest airport station (ASOS/AWOS) ------------ */
+  /* ------------ calibration stations: airports (ASOS/AWOS) and West Texas Mesonet towers ------------ */
   const GHCNH = "https://www.ncei.noaa.gov/access/services/data/v1?dataset=global-historical-climatology-network-hourly";
   const IEM = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py";
-  const KT = 0.514444;
+  const HADS = "https://mesonet.agron.iastate.edu/cgi-bin/request/hads.py";
+  const KT = 0.514444, MPH = 0.44704;
   const MAX_WS = 40, MAX_GUST = 55; // m/s plausibility limits for 2-min mean wind and gusts
   const BAD_QC = new Set(["2", "3", "6", "7"]); // NCEI quality codes: suspect or erroneous
+  /* West Texas Mesonet (Texas Tech) towers are off: the mesonet's data policy allows public use only with its
+     permission. Set ENABLE_WTM once it has agreed. For a local test, ?wtm=1 turns them on when the page is served
+     from this computer (localhost or a file); the public site ignores it. */
+  const ENABLE_WTM = false;
+  const LOCAL = location.protocol === "file:" || /^(localhost|127\.0\.0\.1|\[::1\])$|\.localhost$/.test(location.hostname);
+  const WTM_TRIAL = !ENABLE_WTM && LOCAL && new URLSearchParams(location.search).get("wtm") === "1";
+  const WTM_ON = ENABLE_WTM || WTM_TRIAL;
+  const TOWER_YEARS = 5; // towers train on their latest 5 complete years: the archive starts in Dec 2010 and a year takes ~11 s
+  const HANDICAP = { ASOS: 0, WTM: 20, AWOS: 100 }; // km added to the distance when ranking
+  // a tower recording > 15% fewer hours >= 8 m/s than the airport, each relative to the model, is taken as sheltered:
+  // 7 of 16 towers surveyed in 2024 read 24-85% fewer, the other 9 between 0.89 and 1.41 times the airport's
+  const EXPOSURE_MIN = 0.85, EXPOSURE_THR = 8;
 
   function km(la1, lo1, la2, lo2) {
     const r = Math.PI / 180;
@@ -336,14 +350,23 @@ WG.wind = (function () {
     return 12742 * Math.asin(Math.sqrt(a));
   }
 
-  /* Candidates within maxKm with data for the period. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km
-     handicap: in West Texas several AWOS anemometers read 40-60% fewer erosive hours than nearby ASOS. */
-  function nearestStations(lat, lon, startYear, maxKm = 150, n = 6) {
-    return (window.WE_STATIONS || [])
-      .map(s => ({ id: s[0], name: s[1], lat: s[2], lon: s[3], begin: s[4], awos: !!s[5], ghcnh: s[6] || "", km: km(lat, lon, s[2], s[3]) }))
-      .filter(s => s.km <= maxKm && s.begin <= startYear)
-      .sort((a, b) => (a.km + (a.awos ? 100 : 0)) - (b.km + (b.awos ? 100 : 0)))
-      .slice(0, n);
+  /* Candidates within maxKm with data for the years they are read for (y0-y1: the period; towers their latest
+     TOWER_YEARS), ranked by distance plus a handicap. NWS/FAA ASOS sites first; West Texas Mesonet towers +20 km
+     (an hourly value at :00 in whole mph, no gusts, no QC flags in the feed); AWOS +100 km (in West Texas several
+     AWOS anemometers read 40-60% fewer erosive hours than nearby ASOS). Up to 6 airports and 4 towers. */
+  function nearestStations(lat, lon, nYears, maxKm = 150) {
+    const { start, end } = yearsFor(nYears);
+    const all = (window.WE_STATIONS || []).map(s => {
+      const net = s[7] || (s[5] ? "AWOS" : "ASOS"), d = km(lat, lon, s[2], s[3]);
+      return { id: s[0], name: s[1], lat: s[2], lon: s[3], begin: s[4], net, awos: net === "AWOS", tower: net === "WTM", ghcnh: s[6] || "",
+        km: d, score: d + HANDICAP[net], y0: net === "WTM" ? Math.max(start, end - TOWER_YEARS + 1) : start, y1: end };
+    }).filter(s => s.km <= maxKm && s.begin <= s.y0 && (WTM_ON || !s.tower)).sort((a, b) => a.score - b.score);
+    return [...all.filter(s => !s.tower).slice(0, 6), ...all.filter(s => s.tower).slice(0, 4)].sort((a, b) => a.score - b.score);
+  }
+  /* The tower that ranks ahead of every airport, if any (null while the mesonet is off); skip: ids already tried. */
+  function towerFirst(lat, lon, nYears, skip = []) {
+    const c = nearestStations(lat, lon, nYears).filter(s => !skip.includes(s.id))[0];
+    return c && c.tower ? c : null;
   }
 
   /* Hourly series from reports [unix s, ws, wd, gust]: the routine report nearest each whole hour, after QC. */
@@ -378,7 +401,16 @@ WG.wind = (function () {
           +f[I.wind_speed], f[I.wind_direction] === "" ? null : +f[I.wind_direction], g]);
       }
     }
-    return { ...toHourly(rows, y0, y1), source: "ncei" };
+    return { ...toHourly(rows, y0, y1), source: "ncei", hasGust: true };
+  }
+
+  /* IEM refuses a hads.py request that starts within about a second of another from the same address (HTTP 429,
+     still readable cross-origin) and has throttled asos.py at times: retry twice. */
+  async function iemText(url, timeoutMs) {
+    for (let k = 0; ; k++) {
+      try { return await fetchText(url, timeoutMs); }
+      catch (e) { if (k === 2) throw e; await new Promise(r => setTimeout(r, 3000 * 2 ** k)); } // 429 (busy) or a network error
+    }
   }
 
   /* Iowa Environmental Mesonet ASOS archive (NWS METAR feed): routine reports, knots. */
@@ -386,17 +418,58 @@ WG.wind = (function () {
     const q = `station=${encodeURIComponent(st.id)}&data=sknt&data=drct&data=gust&year1=${y0}&month1=1&day1=1&year2=${y1 + 1}` +
       "&month2=1&day2=1&tz=Etc/UTC&format=onlycomma&latlon=no&missing=null&trace=null&direct=no&report_type=3";
     const rows = [];
-    (await fetchText(`${IEM}?${q}`, 60000)).split("\n").slice(1).forEach(l => {
+    (await iemText(`${IEM}?${q}`, 60000)).split("\n").slice(1).forEach(l => {
       const f = l.split(",");
       if (f.length < 5 || f[2] === "null" || f[2] === "") return;
       const v = f[1];
       rows.push([Date.UTC(+v.slice(0, 4), +v.slice(5, 7) - 1, +v.slice(8, 10), +v.slice(11, 13), +v.slice(14, 16)) / 1000,
         +f[2] * KT, f[3] === "null" ? null : +f[3], f[4] && f[4].trim() !== "null" ? +f[4] * KT : null]);
     });
-    return { ...toHourly(rows, y0, y1), source: "iem" };
+    return { ...toHourly(rows, y0, y1), source: "iem", hasGust: true };
   }
 
-  async function fetchStationObs(st, y0, y1, minCov) {
+  /* West Texas Mesonet tower: the hourly NWS SHEF reports (WFO Lubbock product RR5LUB) archived by IEM, one request
+     per year, newest first and one at a time (IEM refuses a second request from the same address within about a
+     second). Speed in whole mph (USIRZZ, from Oct 2021 USIRZZZ), direction in degrees (UDIR*), stamped at :00 UTC;
+     no gusts. Stops early once even complete later years could not reach minCov. */
+  const hadsYear = (id, y) => iemText(`${HADS}?stations=${encodeURIComponent(id)}&sts=${y}-01-01T00:00Z&ets=${y}-12-31T23:59Z&what=txt`, 60000);
+  async function wtmObs(st, y0, y1, minCov, live) {
+    const hours = (a, b) => (Date.UTC(b, 0, 1) - Date.UTC(a, 0, 1)) / 3.6e6, total = hours(y0, y1 + 1);
+    const rows = [];
+    for (let y = y1; y >= y0; y--) {
+      if (live && !live()) throw new Error("superseded");
+      const L = (await hadsYear(st.id, y)).split("\n"), h = L[0].trim().split(",");
+      if (h[0] === "station") { // otherwise "Error, no results found for query!"
+        const cols = re => h.flatMap((c, i) => (re.test(c) ? [i] : []));
+        const S = cols(/^USIRZZZ?$/), D = cols(/^UDIRZZZ?$/);
+        const first = (f, cc) => { for (const i of cc) if (f[i] && Number.isFinite(+f[i])) return +f[i]; return null; };
+        for (let k = 1; k < L.length; k++) {
+          const f = L[k].trim().split(","), v = f[1] || "";
+          if (v.slice(0, 4) !== String(y)) continue; // ets is inclusive
+          const mph = first(f, S);
+          if (mph !== null) rows.push([Date.UTC(+v.slice(0, 4), +v.slice(5, 7) - 1, +v.slice(8, 10), +v.slice(11, 13), +v.slice(14, 16)) / 1000, mph * MPH, first(f, D), null]);
+        }
+      }
+      if ((rows.length + hours(y0, y)) / total < minCov) break;
+    }
+    return { ...dropStuck(toHourly(rows, y0, y1)), source: "iemhads", hasGust: false };
+  }
+  /* Tower QC: drop runs of 6+ hours at the same non-zero speed (stuck sensor) and 3+ calm hours in a row (iced cups;
+     the towers are calm 0.2-0.9% of hours). */
+  function dropStuck(o) {
+    const keep = o.t.map(() => true);
+    for (let i = 0; i < o.t.length;) {
+      let j = i + 1;
+      while (j < o.t.length && o.ws[j] === o.ws[i] && o.t[j] - o.t[j - 1] === 3600) j++;
+      if (j - i >= (o.ws[i] === 0 ? 3 : 6)) for (let k = i; k < j; k++) keep[k] = false;
+      i = j;
+    }
+    const pick = a => a.filter((_, i) => keep[i]), t = pick(o.t);
+    return { t, ws: pick(o.ws), wd: pick(o.wd), gust: pick(o.gust), coverage: o.coverage * t.length / Math.max(o.t.length, 1) };
+  }
+
+  async function fetchStationObs(st, y0, y1, minCov, live) {
+    if (st.tower) return wtmObs(st, y0, y1, minCov, live);
     if (st.ghcnh) {
       try {
         const o = await ghcnhObs(st, y0, y1);
@@ -409,24 +482,28 @@ WG.wind = (function () {
     return iemObs(st, y0, y1);
   }
 
-  /* First candidate with enough data, or the station the user picked (onlyId). Observations only. */
-  async function findStation(lat, lon, nYears, onlyId) {
-    const { start, end } = yearsFor(nYears);
+  /* First candidate with enough data, or the station the user picked (onlyId). Observations only.
+     Airports unless towers: then only the towers that rank ahead of every airport. live() false stops a tower read;
+     onTry(st) hears of each candidate as its read starts. */
+  async function findStation(lat, lon, nYears, onlyId, { towers = false, live, skip = [], onTry } = {}) {
     const minCov = onlyId ? 0.2 : 0.6; // part-time AWOS records are too gappy unless picked
-    const cands = nearestStations(lat, lon, start).filter(s => !onlyId || s.id === onlyId);
+    const all = nearestStations(lat, lon, nYears).filter(s => !skip.includes(s.id)), lead = all.findIndex(s => !s.tower);
+    const cands = onlyId ? all.filter(s => s.id === onlyId) : towers ? all.slice(0, lead < 0 ? all.length : lead) : all.filter(s => !s.tower);
     for (const st of cands) {
+      if (live && !live()) return null;
+      if (onTry) onTry(st);
       try {
-        const obs = await fetchStationObs(st, start, end, minCov);
+        const obs = await fetchStationObs(st, st.y0, st.y1, minCov, live);
         if (obs.coverage < minCov) continue;
-        return { meta: { ...st, coverage: obs.coverage, obsSource: obs.source }, obs };
+        return { meta: { ...st, coverage: obs.coverage, obsSource: obs.source, hasGust: obs.hasGust }, obs };
       } catch (e) {
-        console.warn("station skipped", st.id, e);
+        if (!live || live()) console.warn("station skipped", st.id, e);
       }
     }
     return null;
   }
 
-  /* The site's gridded model at the station, to train the calibration (light request).
+  /* The site's gridded model at the station for the station's years, to train the calibration (light request).
      days are local epoch days; for MERRA-2 the daily "gust" is the daily max hourly wind. */
   async function fetchModelAt(model, lat, lon, y0, y1) {
     if (model === "merra2") {
@@ -483,7 +560,8 @@ WG.wind = (function () {
     return d;
   }
 
-  function trainMappers(st, off) {
+  /* Hourly speed mapper for each month: reanalysis at the station vs. the station, same hours. */
+  function hourlyMappers(st, off) {
     const modByT = new Map(st.mod.t.map((t, i) => [t, st.mod.ws[i]]));
     const mm = Array.from({ length: 12 }, () => []), mo = Array.from({ length: 12 }, () => []);
     st.obs.t.forEach((t, i) => {
@@ -493,6 +571,10 @@ WG.wind = (function () {
       mm[m].push(x);
       mo[m].push(st.obs.ws[i]);
     });
+    return mm.map((a, m) => mapper(quantiles(a), quantiles(mo[m])));
+  }
+  /* Daily gust mapper for each month: the model's daily gust (MERRA-2: daily max wind) at an airport vs. its daily max gust. */
+  function gustMappers(st, off) {
     const sd = stationDaily(st.obs, off);
     const gm = Array.from({ length: 12 }, () => []), go = Array.from({ length: 12 }, () => []);
     st.mod.days.forEach((d, i) => {
@@ -502,10 +584,7 @@ WG.wind = (function () {
       gm[m].push(x);
       go[m].push(r.gmax);
     });
-    return {
-      hourly: mm.map((a, m) => mapper(quantiles(a), quantiles(mo[m]))),
-      gust: gm.map((a, m) => mapper(quantiles(a), quantiles(go[m]))),
-    };
+    return gm.map((a, m) => mapper(quantiles(a), quantiles(go[m])));
   }
 
   function dailyMaxFromHourly(t, ws, off, dailyT) {
@@ -520,24 +599,27 @@ WG.wind = (function () {
 
   /* Site series with the station's monthly speed distribution and the reanalysis timing and direction.
      Mappers are trained on reanalysis at the station vs. the station, then applied to reanalysis at the site,
-     so the model's site-vs-station difference is kept. */
-  function calibrate(raw, st) {
+     so the model's site-vs-station difference is kept. Gusts are mapped to gst, an airport with its model series
+     (towers record no gusts); without one the daily gust stays empty. */
+  function calibrate(raw, st, gst = st) {
     const off = raw.offset || 0;
-    const M = trainMappers(st, off);
-    const ws = raw.hourly.ws.map((u, i) => (u === null || u === undefined ? u : M.hourly[monthOf(raw.hourly.t[i], off)](u)));
+    const H = hourlyMappers(st, off);
+    const G = gst && gst.mod && gst.meta.hasGust ? gustMappers(gst, off) : null;
+    const ws = raw.hourly.ws.map((u, i) => (u === null || u === undefined ? u : H[monthOf(raw.hourly.t[i], off)](u)));
     const g0 = raw.model === "merra2" ? raw.daily.wmax : raw.daily.gust; // MERRA-2: daily max wind stands in for gusts
     return {
-      ...raw, source: "calibrated", station: st.meta,
+      ...raw, source: "calibrated", station: st.meta, gustStation: G ? gst.meta : null,
       hourly: { ...raw.hourly, ws },
       daily: {
         ...raw.daily,
         wmax: dailyMaxFromHourly(raw.hourly.t, ws, off, raw.daily.t),
-        gust: g0.map((g, i) => (g === null || g === undefined ? g : M.gust[monthOf(raw.daily.t[i], off)](g))),
+        gust: G ? g0.map((g, i) => (g === null || g === undefined ? g : G[monthOf(raw.daily.t[i], off)](g))) : raw.daily.t.map(() => null),
       },
     };
   }
 
-  /* Station observations alone (daily moisture still from gridMET or its fallback at the site). */
+  /* Airport observations alone (daily moisture still from gridMET or its fallback at the site). Not for towers:
+     they cover only their latest TOWER_YEARS, not the period. */
   function stationRaw(raw, st) {
     const off = raw.offset || 0;
     const sd = stationDaily(st.obs, off);
@@ -550,6 +632,28 @@ WG.wind = (function () {
         gust: raw.daily.t.map(d => (sd.get(dayKey(d, off)) || {}).gmax ?? null),
       },
     };
+  }
+
+  /* Exposure check over the tower's years: the tower's mean wind and hours >= 8 m/s, each relative to the model at its
+     own cell, divided by the airport's. Both should stand on open ground, so far fewer erosive hours than the airport
+     mean a sheltered tower (Plainview 1S: 0.51 of LBB's erosive hours, 0.79 of its mean wind). */
+  function exposure(tw, ap) {
+    const t0 = Date.UTC(tw.meta.y0, 0, 1) / 1000, t1 = Date.UTC(tw.meta.y1 + 1, 0, 1) / 1000;
+    const rel = st => {
+      const mod = new Map(st.mod.t.map((t, i) => [t, st.mod.ws[i]]));
+      let so = 0, sm = 0, eo = 0, em = 0, n = 0;
+      st.obs.t.forEach((t, i) => {
+        const x = t >= t0 && t < t1 ? mod.get(t) : null;
+        if (x === null || x === undefined) return;
+        const y = st.obs.ws[i];
+        so += y; sm += x; n++;
+        if (y >= EXPOSURE_THR) eo++;
+        if (x >= EXPOSURE_THR) em++;
+      });
+      return n >= 2000 && sm > 0 && em > 0 ? { mean: so / sm, ero: eo / em } : null;
+    };
+    const a = rel(ap), b = rel(tw);
+    return a && b && a.mean > 0 && a.ero > 0 ? { mean: b.mean / a.mean, ero: b.ero / a.ero } : null;
   }
 
   /* Reanalysis vs. station at the station location, same hours. */
@@ -570,6 +674,7 @@ WG.wind = (function () {
     return { n, meanObs: mo, meanMod: mm, bias: mm - mo, rmse: Math.sqrt(se / n), r, freqObs: eo / n, freqMod: em / n };
   }
 
-  return { fetchWind, analyze, yearsFor, findStation, fetchModelAt, calibrate, stationRaw, compare, nearestStations };
+  return { fetchWind, analyze, yearsFor, findStation, fetchModelAt, calibrate, stationRaw, compare, nearestStations, towerFirst, exposure,
+    wtmOn: WTM_ON, wtmEnabled: ENABLE_WTM, wtmTrial: WTM_TRIAL, TOWER_YEARS, EXPOSURE_MIN };
 })();
 

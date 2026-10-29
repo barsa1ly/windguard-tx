@@ -2,6 +2,11 @@
 WG.methods = (function () {
   const { $, $$, esc } = WG.util;
   const A = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  const WS = window.WE_STATIONS || [], TOWERS = WS.filter(s => s[7] === "WTM"), N_TOWERS = TOWERS.length;
+  const N_USABLE = TOWERS.filter(s => s[4] <= WG.wind.yearsFor(WG.wind.TOWER_YEARS).start).length; // with the 5 complete years a tower trains on
+  const WTM_STATE = WG.wind.wtmEnabled ? "It is used here with the mesonet's permission"
+    : `Its data policy forbids public use without the mesonet's permission, so it is off on this site${WG.wind.wtmTrial ? " (switched on for this local test)" : ""}`;
+  const WTM = A("https://www.mesonet.ttu.edu/", "West Texas Mesonet");
   const USED = '<span class="badge used">used</span>', CHECK = '<span class="badge check">cross-check</span>',
     REF = '<span class="badge ref">reference only</span>', FALLBACK = '<span class="badge ref">fallback</span>';
 
@@ -18,6 +23,9 @@ WG.methods = (function () {
     ["Airport wind observations (ASOS/AWOS)", `NWS/FAA stations, archived by NOAA NCEI in ${A("https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly", "GHCNh")} (successor to ISD, which stopped in Aug 2025)`,
       `<b>Direct:</b> ${A("https://www.ncei.noaa.gov/access/services/data/v1", "NCEI Access Data Service")}, wind columns only, one request per year`, "station, routine hourly METAR, decades",
       `${A("https://mesonet.agron.iastate.edu/request/download.phtml", "Iowa Environmental Mesonet")} ASOS archive (NWS METAR feed)`],
+    ...(WG.wind.wtmOn ? [[`Mesonet tower wind (${WG.wind.wtmEnabled ? "used with the mesonet's permission" : "local test"})`, `${WTM}, Texas Tech University: 10 m towers, relayed hourly by NWS Lubbock as SHEF reports`,
+      `${A("https://mesonet.agron.iastate.edu/request/dcp/fe.phtml", "Iowa Environmental Mesonet")} DCP archive, one request per year, one at a time (about 11 s each)`,
+      `tower, hourly value at :00 in whole mph, Dec 2010 on; the latest ${WG.wind.TOWER_YEARS} complete years`, "the airport calibration stays"]] : []),
     ["Daily precipitation, grass reference ET₀, max/min temperature", `${A("https://www.climatologylab.org/gridmet.html", "gridMET")}, University of Idaho (Abatzoglou 2013): PRISM-based precipitation, NLDAS-2 meteorology, ASCE Penman–Monteith ET₀`,
       `<b>Direct:</b> ${A("https://thredds.northwestknowledge.net/thredds/reacch_climate_MET_aggregated_catalog.html", "THREDDS")} OPeNDAP, one cell, scale and offset read from the file`, "4 km (1/24°) daily, 1979 on", "NASA POWER daily, direct (Penman–Monteith ET₀ computed in the app), then ECMWF daily via Open-Meteo"],
     ["Soil profile, WEG, I, T, MLRA, climatic factor C", "USDA-NRCS Soil Survey Geographic Database (SSURGO)",
@@ -33,7 +41,8 @@ WG.methods = (function () {
     ["Statewide susceptibility and WEG maps", "SSURGO, gridded by UC Davis SoilWeb (800 m WEI, WEG) × NRCS county C",
       "Pre-built 1 km PNGs (tools/build_layers.py)", "1 km", "direct alternative: gNATSGO rasters (multi-GB)"],
     ["Statewide windy-season map; C where a county value is missing", "NASA MERRA-2 climatology", "Pre-built from NASA POWER (tools/fetch_power_grid.py)", "0.5° × 0.625°, 2001–2025", "—"],
-    ["Airport list and NOAA station ids", "IEM station networks; NOAA ISD history and GHCNh station list", "Pre-built data/stations.js (tools/fetch_stations.py)", "417 stations in TX, NM, OK, LA, AR", "—"],
+    ["Station list and NOAA station ids", "IEM station networks; NOAA ISD history and GHCNh station list; West Texas Mesonet site list", "Pre-built data/stations.js (tools/fetch_stations.py)",
+      `${WS.length - N_TOWERS} airports in TX, NM, OK, LA, AR; ${N_TOWERS} West Texas Mesonet towers, ${N_USABLE} with 5 complete years (used only when the mesonet is switched on)`, "—"],
     ["Imagery, labels, roads, rivers", "Esri World Imagery and Reference; USGS The National Map", "Map tiles, direct", "to ~0.5 m", "—"],
     ["Soil map-unit lines", "USDA-NRCS SSURGO", "Soil Data Access WMS, direct (zoom 13+)", "—", "—"],
     ["Place search and names", "OpenStreetMap contributors", "Nominatim, direct", "—", "—"],
@@ -98,10 +107,10 @@ WG.methods = (function () {
     ["Prevailing erosive direction", "sector k with max 0.5 E<sub>k−1</sub> + E<sub>k</sub> + 0.5 E<sub>k+1</sub>", "16 sectors of 22.5°. Barrier and strip rows run at that direction + 90°.", "Wind tab, Practices", "App", USED],
     ["Resultant transport direction", "atan2( Σ E sin(θ + 180°), Σ E cos(θ + 180°) )", "θ: direction the wind blows from.", "Wind tab", "App", USED],
     ["Trend", "b = Σ(x − x̄)(y − ȳ) / Σ(x − x̄)²,&nbsp; t = b / SE(b)", "y: erosive hours per year; x: year. Significant if |t| &gt; t<sub>0.975, n−2</sub>.", "Wind tab", "Ordinary least squares", USED],
-    ["Calibration to the airport (quantile mapping)", "u′ = F<sup>−1</sup><sub>obs, m</sub>( F<sub>model, m</sub>(u) )",
-      "F: empirical distribution for calendar month m, 101 quantiles 0.1–99.9%, trained on the model at the station's cell vs the station, same hours; beyond the ends u′ = u · q<sub>obs</sub>/q<sub>model</sub>. Applied to the model at the site. Gusts mapped the same way.",
+    ["Calibration to the nearest station (quantile mapping)", "u′ = F<sup>−1</sup><sub>obs, m</sub>( F<sub>model, m</sub>(u) )",
+      "F: empirical distribution for calendar month m, 101 quantiles 0.1–99.9%, trained on the model at the station's cell vs the station, same hours; beyond the ends u′ = u · q<sub>obs</sub>/q<sub>model</sub>. Applied to the model at the site. Gusts mapped the same way, always to an airport. A mesonet tower, when switched on, trains on its latest complete years only.",
       "Wind tab default", "Panofsky &amp; Brier 1968; Themeßl et al. 2011", USED],
-    ["Station hourly series and QC", "report nearest each whole hour (routine METAR, FM-15)", "Dropped: u &gt; 40 m/s, gust &gt; 55 m/s or below u, NCEI quality codes 2, 3, 6, 7.", "Calibration, station-only option", "App", USED],
+    ["Station hourly series and QC", "report nearest each whole hour (routine METAR, FM-15)", "Dropped: u &gt; 40 m/s, gust &gt; 55 m/s or below u, NCEI quality codes 2, 3, 6, 7. Mesonet towers (when on): the :00 value; runs of 6+ hours at one non-zero speed or 3+ calm hours dropped; skipped when they record &lt; 0.85 times the airport's hours ≥ 8 m/s, each relative to the model.", "Calibration, station-only option", "App", USED],
     ["Model vs station statistics", "bias = mean(u<sub>model</sub> − u<sub>obs</sub>) · RMSE = √mean((u<sub>model</sub> − u<sub>obs</sub>)²) · Pearson r", "Same hours at the station.", "Comparison card", "Standard", USED],
     ["Grass reference ET₀ (computed by gridMET)", "ET₀ = [0.408 Δ (R<sub>n</sub> − G) + γ (900 / (T + 273)) u₂ (e<sub>s</sub> − e<sub>a</sub>)] / [Δ + γ (1 + 0.34 u₂)]",
       "ASCE standardized Penman–Monteith, daily, short grass: Δ slope of vapor-pressure curve, R<sub>n</sub> net radiation, G soil heat flux, γ psychrometric constant, e<sub>s</sub> − e<sub>a</sub> vapor-pressure deficit.",
@@ -175,7 +184,16 @@ WG.methods = (function () {
       <section id="m-scales"><h4>Classes and scales</h4>${table(["Number on screen", "Scale", "What it means"], scaleRows(), "scales")}
         <h4>Wind Erodibility Groups</h4>${table(["WEG", "Texture guide", "I, t/ac/yr"], wegRows(), "weg")}
         <p class="fine">For a named soil, NRCS uses the group recorded in the soil survey; the texture guide is for soils that are not identified (${A("https://efotg.sc.egov.usda.gov/references/public/TX/Wind_Erosion.pdf", "National Agronomy Manual, Part 502")}). So a soil's group can differ from what its texture suggests: Pullman clay loam, for example, is WEG 7. The app shows the survey's group, and uses the guide only when you edit the surface layer. Texture guide: USDA-NRCS ${A("https://directives.nrcs.usda.gov/sites/default/files2/1725389517/Part%20618%20Subpart%20B%20%E2%80%93%20Exhibits.pdf", "National Soil Survey Handbook, Part 618 Subpart B")}, §618.93 (amended August 2024). Calcareous: strong or violent fizzing of the fine earth in cold dilute (1N) HCl. Rock fragments move a soil to a less erodible group, meaning the next lower I (86 → 56): one group at 15–35% by volume, two at 35–60%, I = 0 above 60% (sands and loamy sands move less).</p></section>
-      <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}</section>
+      <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}
+        <h4>Other wind networks</h4>
+        <p class="fine">Calibration uses airports: no other network gives a web page hourly 10 m wind for years without a key, at the airport standard, and for public use. Checked in October 2026:</p>
+        <ul class="fine">
+          <li>${WTM} (Texas Tech, ${N_TOWERS} towers at 10 m, ${N_USABLE} with 5 complete years): readable through the Iowa Environmental Mesonet's archive of NWS hourly reports since December 2010. Some towers match the airports (Reese Center: 0.99 of Lubbock airport's mean wind, 1.00–1.03 times its hours ≥ 8 m/s), but in a 2024 survey 7 of 16 towers recorded 24–85% fewer erosive hours than a nearby airport, relative to the model: probably sheltered. ${WTM_STATE}. Built in for when it is allowed: a tower ranks ahead of an airport when its distance plus 20 km is less than the airport's (an AWOS airport counts 100 km extra), and then calibrates the speeds if it records at least 0.85 times the airport's erosive hours, relative to the model; gusts stay with the airport.</li>
+          <li>TexMesonet (Texas Water Development Board) and the West Texas Mesonet's own website do not let other websites read their data.</li>
+          <li>RAWS fire-weather stations and NRCS SCAN read 20–50% below airports or 10 m mesonet towers at the same place, even after correcting for sensor height (tested at 2 RAWS and 3 SCAN sites).</li>
+          <li>USCRN measures wind at 1.5 m; coastal NOAA stations measure over water.</li>
+          <li>Synoptic Data needs a paid key; the Oklahoma Mesonet and TexasET need a licence or purchase; TCEQ's own pages give one site-day at a time, and EPA's copies of its air-quality sites need a personal key or come as national zip files a web page cannot use.</li>
+        </ul></section>
       <section id="m-erod"><h4>Erodibility equations</h4>${table(EQ_COLS, eqRows(EROD), "eqs")}</section>
       <section id="m-wind"><h4>Wind and climate equations</h4>${table(EQ_COLS, eqRows(WIND), "eqs")}</section>
       <section id="m-soil"><h4>Soil water and profile equations</h4>${table(EQ_COLS, eqRows(SOIL), "eqs")}</section>

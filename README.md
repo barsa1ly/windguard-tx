@@ -50,7 +50,16 @@ Every default source is read directly from the agency that produces it. Open-Met
 | Geocoding, basemaps | OpenStreetMap Nominatim; Esri, USGS | direct | — |
 | County lines | U.S. Census TIGER | TIGERweb map service, drawn per tile, direct | — |
 
-The station list with NOAA GHCNh ids is in `data/stations.js` (`tools/fetch_stations.py`).
+The station list (airports with NOAA GHCNh ids, and West Texas Mesonet towers) is in `data/stations.js` (`tools/fetch_stations.py`).
+
+### Other wind networks
+
+Calibration uses airports. Other networks were checked in October 2026 (details in `docs/METHODS.md` §3):
+
+- **West Texas Mesonet** (Texas Tech, 189 towers at 10 m) is the one network with 10 m wind that a web page can read without a key or licence. Some towers read like the airports (Reese Center vs Lubbock airport: 0.99 of the mean wind and 1.00–1.03 times the hours ≥ 8 m/s in 2020 and 2025), but in a 2024 survey 7 of 16 towers recorded 24–85% fewer erosive hours than a nearby airport, relative to the model: probably sheltered. Its [data policy](https://www.mesonet.ttu.edu/disclaimer) forbids public use without the mesonet's permission (mesonet@ttu.edu), so it is **switched off**. The code is in place: set `ENABLE_WTM = true` in `js/wind.js` once the mesonet agrees. For a local test, run the app as above and open <http://localhost:8765/?wtm=1>; the public site ignores `?wtm=1`.
+  - When on, a tower ranks ahead of an airport when its distance plus 20 km is less than the airport's (an AWOS airport counts 100 km extra). Such a tower refines the calibration about a minute after the airport result appears, if it records at least 0.85 times the airport's erosive hours relative to the model; otherwise the app checks one more tower, then keeps the airport. A tower is used unchecked only when no airport was found.
+  - A tower needs 5 complete years in the archive (132 of 189 in 2026) and trains on them. Gusts stay with the airport.
+- **Not usable:** TexMesonet (TWDB) and the West Texas Mesonet website refuse other websites; RAWS and NRCS SCAN read 20–50% low even after height correction at the 2 RAWS and 3 SCAN sites tested; USCRN is at 1.5 m; Synoptic needs a paid key; the Oklahoma Mesonet and TexasET need a licence.
 
 ## How the data flows
 

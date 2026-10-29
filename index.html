@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=18">
+  <link rel="stylesheet" href="css/app.css?v=19">
 </head>
 <body>
 <div id="app" class="app">
@@ -205,7 +205,7 @@
         <div class="toolbar">
           <label>Wind data
             <select id="srcSel">
-              <option value="cal">Calibrated to nearest airport</option>
+              <option value="cal">Calibrated to nearest station</option>
               <option value="station">Airport station only</option>
               <option value="model">Gridded model only</option>
             </select>
@@ -268,11 +268,11 @@
         </div>
 
         <div class="card" id="calCard" hidden>
-          <div class="card-h"><h3>Reanalysis vs airport station</h3>
+          <div class="card-h"><h3>Reanalysis vs measured wind</h3>
             <select id="stnSel" class="mini-select" aria-label="Calibration station"></select></div>
           <div class="chart-box"><canvas id="chCal"></canvas></div>
           <div class="kv" id="calKv" style="margin-top:10px"></div>
-          <p class="fine">Hourly reanalysis smooths wind over a 9–50 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the airport (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
+          <p class="fine">Hourly reanalysis smooths wind over a 9–50 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the station (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
         </div>
 
         <div class="card">
@@ -401,15 +401,15 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=18"></script>
-<script src="data/stations.js?v=18"></script>
-<script src="js/util.js?v=18"></script>
-<script src="js/soil.js?v=18"></script>
-<script src="js/wind.js?v=18"></script>
-<script src="js/charts.js?v=18"></script>
-<script src="js/practices.js?v=18"></script>
-<script src="js/methods.js?v=18"></script>
-<script src="js/app.js?v=18"></script>
-<script src="js/area.js?v=18"></script>
+<script src="data/layers.js?v=19"></script>
+<script src="data/stations.js?v=19"></script>
+<script src="js/util.js?v=19"></script>
+<script src="js/soil.js?v=19"></script>
+<script src="js/wind.js?v=19"></script>
+<script src="js/charts.js?v=19"></script>
+<script src="js/practices.js?v=19"></script>
+<script src="js/methods.js?v=19"></script>
+<script src="js/app.js?v=19"></script>
+<script src="js/area.js?v=19"></script>
 </body>
 </html>

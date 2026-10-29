@@ -12,6 +12,7 @@ This file lists every calculation the app makes, with its source. `docs/RESEARCH
 | Hourly 10 m wind (backup or option) | ECMWF IFS analysis; ERA5 (Copernicus C3S) | Open-Meteo archive, a copy. ECMWF/CDS need a personal key and queued jobs, which a web page can't use. | 9 km (2017 on); 0.25° (before) | NASA MERRA-2 |
 | Daily max gust | ECMWF IFS / ERA5 only | Open-Meteo, with ECMWF wind | as above | MERRA-2 has none; calibration maps daily max wind to station gusts |
 | Airport observations | NWS/FAA ASOS/AWOS, archived in NOAA NCEI GHCNh (ISD stopped Aug 2025) | NCEI Access Data Service, direct; wind columns, one request per year | routine hourly METAR | Iowa Environmental Mesonet ASOS archive |
+| Mesonet towers (switched off) | West Texas Mesonet, Texas Tech: 10 m towers, relayed hourly by NWS Lubbock (SHEF) | Iowa Environmental Mesonet DCP archive (`hads.py`), one request per year, one at a time | hourly value at :00, whole mph, Dec 2010 on | the airport calibration stays |
 | Precipitation, grass ET₀, Tmax/Tmin | gridMET, University of Idaho (Abatzoglou 2013) | THREDDS OPeNDAP, direct; packing read from the file | 4 km daily, 1979 on | NASA POWER daily, direct, with FAO-56 Penman–Monteith ET₀ computed in the app; then ECMWF daily via Open-Meteo |
 | Soil profile, WEG, I, T, MLRA, C | USDA-NRCS SSURGO | Soil Data Access, direct | 1:12k–1:24k map units | none |
 | Elevation, slope, aspect | USGS 3DEP | Elevation Point Query Service, direct | 1–10 m | Copernicus GLO-90 via Open-Meteo |
@@ -108,10 +109,10 @@ For a named soil, NRCS uses the group recorded in the soil survey; the texture g
 - **Daily max wind** comes from the hourly series.
 - **Open-Meteo cost:** the default lookup makes no Open-Meteo calls. If you pick ECMWF, a 10-year lookup costs about 130 Open-Meteo "calls" (78 at the site plus 52 at the station), against free limits of 600 per minute and 10,000 per day per IP.
 
-**Calibration to the nearest airport station (default):**
+**Calibration to the nearest station (default):**
 - **Station data:** routine hourly METARs (FM-15: 2-minute mean wind at 10 m, plus gusts) from NOAA NCEI GHCNh, one request per year. The report nearest each whole hour is kept, and NCEI quality codes 2, 3, 6 and 7 (suspect or erroneous) are dropped. Stations without a GHCNh id, or with GHCNh coverage below the threshold, use the Iowa Environmental Mesonet ASOS archive.
 - **Quality control:** sustained wind > 40 m/s or gust > 55 m/s is dropped. Hobbs, for example, has 250-kt garbled reports that otherwise dominate cubic energy sums.
-- **Station choice:** the nearest station within 150 km with data from the start year and ≥ 60% of hours. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km handicap, because in West Texas several AWOS anemometers (Seminole, Andrews, Snyder, Pecos) read 40–60% fewer erosive hours than nearby ASOS. You can pick another station in the Wind tab.
+- **Station choice:** the nearest airport within 150 km with data from the start year and ≥ 60% of hours. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km handicap, because in West Texas several AWOS anemometers (Seminole, Andrews, Snyder, Pecos) read 40–60% fewer erosive hours than nearby ASOS. You can pick another station in the Wind tab.
 - **Method:** monthly empirical quantile mapping. It is trained on the same gridded model at the station's grid cell versus the station on the same hours, using 101 quantiles between 0.1% and 99.9%, with end ratios beyond those. It is then applied to reanalysis at the site, so the model's site-vs-station difference is kept. Daily max gusts are mapped the same way against station daily max gusts; with MERRA-2, which has no gusts, the model's daily max hourly wind is mapped onto station gusts. Direction and timing stay from the model.
 - **Other sources you can select:** "Airport station only" (rain and ET₀ still from gridMET) and "Gridded model only".
 - **Check, Lubbock 2016–2025:** reanalysis vs LBB mean wind 4.41 vs 5.24 m/s, hourly r = 0.80, RMSE 1.85 m/s. Erosive hours (≥ 8 m/s) were 5.3% vs 15.1%.
@@ -120,6 +121,59 @@ For a named soil, NRCS uses the group recorded in the soil survey; the texture g
   - Drift potential: 553 VU calibrated vs 153 VU reanalysis.
 
 With gridMET moisture, the Lubbock calibrated high-risk months are Feb–Apr. May falls just under the cutoff (9.3% of annual risk), because gridMET records more May rain (77 mm) than the ECMWF model did.
+
+**West Texas Mesonet towers (switched off).** Built in, but off because the mesonet's data policy forbids public use without its permission. `ENABLE_WTM` in `js/wind.js` turns them on. For a local test, `?wtm=1` turns them on when the page is served from the same computer (localhost or a file); the public site ignores it. When on:
+- **Data:** the hourly NWS SHEF reports (WFO Lubbock product RR5LUB) archived by the Iowa Environmental Mesonet, read with `hads.py`, one station-year per request, one request at a time (IEM refuses a `hads.py` request that starts within about a second of another from the same address; failed IEM requests, including the airport fallback, are retried twice). Speed is column `USIRZZ` (from October 2021 `USIRZZZ`) in whole mph, direction `UDIRZZ`/`UDIRZZZ`; values are stamped at :00 UTC. The feed has no gusts and no QC flags. Tower names and positions come from the NWS station list that IEM publishes; the mesonet's own site list only tells which stations are its towers.
+- **Years:** the latest 5 complete years (one year takes about 11 s; the archive starts in December 2010). A tower therefore needs 5 complete years in the archive (132 of the 189 towers in 2026), and it can calibrate the 20-year period too.
+- **QC:** speed 0–40 m/s; runs of 6+ hours at one non-zero speed (stuck sensor) and 3+ calm hours in a row (iced cups; the towers are calm 0.2–0.9% of hours) are dropped; ≥ 60% of hours, or 20% for a station you pick. Towers with too little data are passed over.
+- **Ranking:** distance + 0 km for ASOS, + 20 km for a tower, + 100 km for AWOS. So a tower ranks ahead of an ASOS airport when it is more than 20 km closer, and ahead of an AWOS airport unless it is more than 80 km farther. The airport result appears first. When a tower ranks ahead of every airport, it loads alongside, and about a minute later its speed calibration replaces the airport's if it passes the exposure check. Daily gusts stay mapped to the airport; with no airport within 150 km, or none with a model series, they are n/a. "Airport station only" stays the airport, because a tower covers only 5 years.
+- **Exposure check:** airports and towers should both stand on open ground. Over the tower's 5 years the app compares the tower with the airport it found, each relative to the model at its own cell: the ratio of hours ≥ 8 m/s and of mean wind. A tower with less than 0.85 times the airport's erosive hours is taken as sheltered and skipped, and so is a tower that cannot be compared (the airport has no model series, or too few shared hours). A tower is used without the check only when no airport was found. After a skip the app checks one more tower that still ranks ahead of the airport, then keeps the airport calibration. A station you pick yourself is used anyway, and the card shows its check. The check trusts the airport, so it is weaker when that airport is an AWOS. In the app, Plainview 1S (PVST2) against LBB, 2021–2025, gave 0.51 of the erosive hours and 0.79 of the mean wind and was skipped; Aiken (AIKT2) then gave 0.89 and 0.95 and was used.
+- **Survey, 2024:** 16 towers within 60 km of an NWS (ASOS) airport, every fifth by longitude, against that airport, each relative to MERRA-2 at its own cell. Median ratio 0.93 for mean wind and 0.89 for erosive hours; 7 of 16 fall below 0.85. Four of the 16 (PTXT2, BDGT2, SHXT2, JLNN5) began after 2021, so the app cannot use them yet anyway.
+
+  | Tower / airport | km | Mean wind | Hours ≥ 8 m/s | Passes the check |
+  |---|---|---|---|---|
+  | Fort Chadbourne (FCBT2) / DYS | 56 | 0.68 | 0.15 | no |
+  | New Home (NEHT2) / LBB | 39 | 0.83 | 0.53 | no |
+  | Memphis (MEST2) / CDS | 40 | 0.73 | 0.59 | no |
+  | Amarillo 9NNE (AMNT2) / AMA | 16 | 0.83 | 0.72 | no |
+  | Pantex 1ESE (PTXT2) / AMA | 18 | 0.91 | 0.75 | no |
+  | Belding Williams Ranch (BDGT2) / FST | 14 | 0.90 | 0.75 | no |
+  | Floydada (FLST2) / LBB | 59 | 0.93 | 0.76 | no |
+  | Abernathy (ARST2) / LBB | 24 | 0.94 | 0.89 | yes |
+  | Olton (ONST2) / LBB | 55 | 0.97 | 0.89 | yes |
+  | Shallowater (SHXT2) / LBB | 16 | 0.95 | 0.94 | yes |
+  | Jal Antelope Ridge (JLNN5) / HOB | 55 | 1.02 | 0.95 | yes |
+  | Lomax (LOXT2) / MAF | 57 | 0.90 | 0.96 | yes |
+  | Levelland (LDST2) / LBB | 52 | 0.99 | 1.07 | yes |
+  | Friona (FAST2) / CVN | 44 | 1.01 | 1.17 | yes |
+  | Goodlett (GDST2) / CDS | 33 | 1.01 | 1.18 | yes |
+  | Turkey (TUST2) / CDS | 59 | 1.05 | 1.41 | yes |
+
+- **Other checks:** the :00 value against a 2-minute METAR mean changes erosive hours by about 3% (LBB 1-minute data, March–April 2022). Raw ratios against airports (whole years, not relative to the model):
+
+  | Tower / airport | Distance | Mean wind | Hours ≥ 8 m/s | Energy above 8 m/s | r |
+  |---|---|---|---|---|---|
+  | Reese Center (REST2) / LBB, 2020 | 21 km | 0.99 | 1.03 | 0.95 | 0.82 |
+  | Reese Center (REST2) / LBB, 2025 | 21 km | 0.99 | 1.00 | 0.96 | 0.84 |
+  | Childress (CXST2) / CDS, 2024 | 9 km | 1.07 | 1.13 | 0.82 | 0.85 |
+  | Levelland (LDST2) / LLN (AWOS), 2024 | 3 km | 0.99 | 1.07 | 0.92 | 0.89 |
+  | San Angelo 7NW (SJST2) / SJT, 2020 | 22 km | 0.83 | 0.35 | 0.23 | 0.71 |
+
+  San Angelo shows that single sites can differ. The two Reese Center rows were re-checked independently with the app's own rules.
+
+**Other wind networks checked (October 2026).** Requirement: hourly wind for years, readable by a web page (CORS) without a key, comparable with a 10 m airport anemometer, and allowed for public use.
+
+| Network | Readable from a web page | Comparable | Not used because |
+|---|---|---|---|
+| West Texas Mesonet via IEM | yes | where the exposure check passes (above) | data policy: public use needs the mesonet's permission |
+| West Texas Mesonet website, TexMesonet (TWDB) API and archive, MADIS | no (CORS) | — | other websites are refused; TWDB data start in 2016 |
+| RAWS (USFS FEMS, IEM), NRCS SCAN | yes | no | 6.1 m (RAWS) and about 3 m (SCAN) sensors at sheltered sites read 20–50% low after height correction; hours ≥ 8 m/s 1–31% of the reference (2 RAWS, 3 SCAN sites) |
+| USCRN | yes | no | wind at 1.5 m |
+| NOAA CO-OPS, NDBC, coastal GHCNh | partly | no | over-water exposure; the coast has airports |
+| Synoptic Data / MesoWest | yes | — | paid key |
+| Oklahoma Mesonet, TexasET (AgriLife) | Oklahoma yes, TexasET no | — | licensed or paid; TexasET at 2 m |
+| TCEQ CAMS, EPA AQS | no / key | — | one site-day per page, a personal key (AQS API) or national zip files (AirData); urban sites |
+| LCRA Hydromet, NMSU ZiaMet | no (CORS) | — | — |
 
 **Erosive threshold:** 8 m/s at 10 m by default. This is the NRCS figure of 13 mph at 1 ft, or about 18 mph at 30 ft (Lyles & Krauss 1971; NAM Part 502). You can change it from 5 to 12 m/s.
 
@@ -132,7 +186,7 @@ With gridMET moisture, the Lubbock calibrated high-risk months are Feb–Apr. Ma
   - **Amber**: share ≥ 6.7%.
   - These cut-offs are an app convention.
 
-**Gust days:** daily max gust ≥ 17.9 m/s (40 mph). Shown as n/a for uncalibrated MERRA-2.
+**Gust days:** daily max gust ≥ 17.9 m/s (40 mph). Shown as n/a for uncalibrated MERRA-2, and for a tower calibration with no airport within 150 km.
 
 **FAO climatic index:** (1/100) Σ u₂³ · D · days. u₂ = 0.748 u₁₀ (FAO-56 Eq. 47). Months with P > ET₀ are clamped to 0.
 
@@ -145,7 +199,7 @@ With gridMET moisture, the Lubbock calibrated high-risk months are Feb–Apr. Ma
 
 **Trend:** ordinary least-squares slope of erosive hours per year, with a two-sided t-test at 95%.
 
-Airport anemometers sit on open, mown ground, so calibrated values describe exposed fields. Sheltered sites blow less.
+Airport anemometers sit on open, mown ground (mesonet towers should too; the exposure check tests it), so calibrated values describe exposed fields. Sheltered sites blow less.
 
 ## 4. Soil profile (Soil tab and exports)
 
