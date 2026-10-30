@@ -86,9 +86,26 @@ Calibration uses airports. Other networks were checked in October 2026 (details 
 
 ## How the data flows
 
-[`docs/WindGuard_TX_Data_Flow.docx`](docs/WindGuard_TX_Data_Flow.docx) has three diagrams and tables showing where each dataset comes from, where it is calculated, and how each result reaches the screen. Rebuild it with `python tools/build_flow_doc.py`.
+[`docs/WindGuard_TX_Data_Flow.docx`](docs/WindGuard_TX_Data_Flow.docx) has these diagrams and tables showing where each dataset comes from, where it is calculated, and how each result reaches the screen. Rebuild it with `python tools/build_flow_doc.py`. The diagrams are vector drawings, sharp at any zoom: click one to open it on its own. 600 dpi PNG copies are next to them in `docs/img/`.
 
-![Data flow: sources, calculations in the browser, results](docs/img/flow_overview.png)
+[![Data flow: sources, calculations in the browser, results](docs/img/flow_overview.svg)](docs/img/flow_overview.svg)
+
+<details>
+<summary>The wind, soil and area pipelines</summary>
+
+**Wind and climate: three sources to monthly risk**
+
+[![Wind and moisture pipeline with every fallback](docs/img/flow_wind.svg)](docs/img/flow_wind.svg)
+
+**Soil survey to erosion risk**
+
+[![Soil and erosion-risk pipeline](docs/img/flow_soil.svg)](docs/img/flow_soil.svg)
+
+**Field or area analysis, and the map-click check**
+
+[![Field or area analysis and the map-click check](docs/img/flow_area.svg)](docs/img/flow_area.svg)
+
+</details>
 
 ## Rebuilding the statewide layers
 

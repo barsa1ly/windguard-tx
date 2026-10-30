@@ -8,13 +8,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 IMG = ROOT / "docs" / "img"
 DOCX = ROOT / "docs" / "WindGuard_TX_Data_Flow.docx"
 
 FONT, MONO = "Segoe UI", "Consolas"
-plt.rcParams.update({"font.family": FONT, "font.size": 10.5})
+DPI = 600  # PNG for the Word document; the SVG next to it (for GitHub) is sharp at any zoom
+# text as outlines, so the SVG needs no fonts; a fixed salt and no date, so an unchanged figure gives an unchanged file
+plt.rcParams.update({"font.family": FONT, "font.size": 10.5, "svg.fonttype": "path", "svg.hashsalt": "windguard"})
 
 INK, INK2, MUTED, LINE = "#1F2933", "#3E4C59", "#616E7C", "#52606D"
 PAL = {  # fill, border
@@ -53,7 +56,7 @@ class Sheet:
 
     def __init__(self, w, h):
         self.w, self.h = w, h
-        self.fig = plt.figure(figsize=(w, h), dpi=220)
+        self.fig = plt.figure(figsize=(w, h), dpi=DPI)
         self.ax = self.fig.add_axes([0, 0, 1, 1])
         self.ax.set_xlim(0, w)
         self.ax.set_ylim(0, h)
@@ -122,9 +125,11 @@ class Sheet:
                 print(f"  ! '{t.get_text()}' overflows its box by {right - limit:.2f} in")
         IMG.mkdir(parents=True, exist_ok=True)
         out = IMG / name
-        self.fig.savefig(out, dpi=220, facecolor="white")
+        self.fig.savefig(out, dpi=DPI, facecolor="white")
+        self.fig.savefig(out.with_suffix(".svg"), facecolor="white", metadata={"Date": None})
         plt.close(self.fig)
-        print("wrote", out.relative_to(ROOT))
+        Image.open(out).convert("RGB").save(out, optimize=True, dpi=(DPI, DPI))
+        print("wrote", out.relative_to(ROOT), "and", out.with_suffix(".svg").name)
         return out
 
 
