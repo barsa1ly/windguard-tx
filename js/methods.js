@@ -28,6 +28,10 @@ WG.methods = (function () {
       `tower, hourly value at :00 in whole mph, Dec 2010 on; the latest ${WG.wind.TOWER_YEARS} complete years`, "the airport calibration stays"]] : []),
     ["Daily precipitation, grass reference ET₀, max/min temperature", `${A("https://www.climatologylab.org/gridmet.html", "gridMET")}, University of Idaho (Abatzoglou 2013): PRISM-based precipitation, NLDAS-2 meteorology, ASCE Penman–Monteith ET₀`,
       `<b>Direct:</b> ${A("https://thredds.northwestknowledge.net/thredds/reacch_climate_MET_aggregated_catalog.html", "THREDDS")} OPeNDAP, one cell, scale and offset read from the file`, "4 km (1/24°) daily, 1979 on", "NASA POWER daily, direct (Penman–Monteith ET₀ computed in the app), then ECMWF daily via Open-Meteo"],
+    ["Daily weather for model files", "gridMET (default) or NASA POWER; or your own daily file",
+      `<b>Direct:</b> gridMET THREDDS, 9 variables for the chosen dates; ${A("https://power.larc.nasa.gov/docs/services/api/temporal/daily/", "NASA POWER")} daily API; your CSV, text or Excel file read in the browser`,
+      "gridMET 4 km, 1979 on (about 2 days behind); POWER 0.5°, 1981 on (solar 1984)", "NASA POWER; gaps in your file can be filled from gridMET"],
+    ["Atmospheric CO₂ (APSIM files)", "NOAA Global Monitoring Laboratory, Mauna Loa", `Annual means 1979–2025 built into the app (${A("https://gml.noaa.gov/ccgg/trends/", "NOAA GML")})`, "yearly", "+2.5 ppm a year after 2025"],
     ["Soil profile, WEG, I, T, MLRA, climatic factor C", "USDA-NRCS Soil Survey Geographic Database (SSURGO)",
       `<b>Direct:</b> ${A("https://sdmdataaccess.nrcs.usda.gov/", "Soil Data Access")} REST queries`, "map units, 1:12,000–1:24,000", "none: enter a soil test on the Soil tab"],
     ["Elevation, slope, aspect", "USGS 3D Elevation Program (3DEP)", `<b>Direct:</b> ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")}, 5 points`, "1–10 m lidar/DEM", "Copernicus GLO-90 via Open-Meteo"],
@@ -67,7 +71,7 @@ WG.methods = (function () {
     ["Texture class", "USDA texture triangle (sand, silt, clay %)", "Sand-size modifier (e.g. fine sandy loam) kept from the survey when the family is unchanged.",
       "Soil tab", "Soil Survey Manual (USDA Handbook 18, 2017)", USED],
     ["Risk classes", "E &lt; 10 Low · 10–40 Moderate · 40–80 High · 80–150 Very high · ≥ 150 Extreme",
-      "t/ac/yr; roughly 2, 8, 16 and 30 times T = 5.", "Overview risk card; area analysis", "App convention, not NRCS classes", USED],
+      "t/ac/yr; roughly 2, 8, 16 and 30 times T = 5. The exact E is classed, in every display unit; where rounding to whole numbers would carry it across an edge it is shown with one decimal (39.6, Moderate, not 40).", "Overview risk card; area analysis; Practices", "App convention, not NRCS classes", USED],
     ["Area share of a WEG or risk class", "share<sub>k</sub> = Σ<sub>points</sub> Σ<sub>components</sub> (pct / 100) · [class = k] &nbsp;/&nbsp; Σ<sub>points</sub> Σ<sub>components</sub> (pct / 100)",
       "About 20,000 stratified random points inside the boundary (seeded, so the same area gives the same answer). Points on a building, a road (within its class half-width) or water, outside Texas, or without soil data are left out; each map unit is split by its component percentages; components without a WEG are reported separately. Acres = share × analysed acres; mean I and E are weighted the same way, with E = I × C / 100 and C from each map unit's climatic-factor area.",
       "Field or area analysis", "App", USED],
@@ -98,13 +102,14 @@ WG.methods = (function () {
     ["Erosive hours", "N<sub>m</sub> = (n<sub>u ≥ uₜ</sub> / n) × 24 × days<sub>m</sub>", "n: hours with data in month m (normalizes station gaps).", "Overview, Wind tab", "App", USED],
     ["Erosive wind energy", "E<sub>m</sub> = Σ u² (u − uₜ), scaled to a full month", "u: hourly 10 m wind (m/s).", "Risk index, rose, prevailing direction", "After Bagnold 1941 (cubic transport); app", USED],
     ["Dryness", "D = clamp( (ET₀ − P) / ET₀, 0, 1 )", "P: precipitation; ET₀: grass reference ET (mm/month), gridMET.", "Risk index", "App, after FAO 1979", USED],
-    ["Monthly risk index and red months", "R<sub>m</sub> = E<sub>m</sub> × D<sub>m</sub>,&nbsp; share<sub>m</sub> = R<sub>m</sub> / Σ R", "Red: share ≥ 10% (8.3% if even); amber ≥ 6.7%.", "Month strip, seasonal chart", "App convention", USED],
+    ["Monthly risk index and red months", "R<sub>m</sub> = E<sub>m</sub> × D<sub>m</sub>,&nbsp; share<sub>m</sub> = R<sub>m</sub> / Σ R", "Red: share ≥ 10% (8.3% if even); amber ≥ 6.7%. Only for a period covering all 12 months: with fewer, the shares are of the months covered and no month is ranked.", "Month strip, seasonal chart, Practices calendar", "App convention", USED],
     ["Gust days", "daily max gust ≥ 17.9 m/s (40 mph)", "Blowing-dust days.", "Wind tab", "App", USED],
+    ["Period", "last 10 complete calendar years, or your own dates (30 days or more inside the model's record, 20 or more of them in one calendar month)", "MERRA-2 from 2001, ECMWF from 1979, both up to a few days ago; days run midnight to midnight CST. Monthly values need 480 hours or more; yearly totals need all 12 months; the trend needs 5 complete years. The page address keeps the period and the model. If the chosen model fails, the other one is used for the same dates, or for as many of them as its record holds.", "Wind tab, Overview", "App", USED],
     ["Log-law height conversion", "u₂ = u<sub>z</sub> · 4.87 / ln(67.8 z − 5.42) → u₂ = 0.748 u₁₀", "z: measurement height (m).", "FAO climatic index", "Allen et al. 1998, FAO-56 Eq. 47", USED],
     ["FAO wind-erosion climatic index", "C<sub>FAO</sub> = (1/100) Σ<sub>months</sub> u₂³ · (ET₀ − P)/ET₀ · d", "u₂: mean monthly wind at 2 m (m/s); d: days. Months with P &gt; ET₀ count as 0.", "Wind tab", "FAO 1979", USED],
     ["Sand drift potential", "DP = Σ V² (V − Vₜ) / N,&nbsp; Vₜ = 12 kt", "V: hourly wind at 10 m (knots); N: all hours. RDP: length of the vector sum; RDD: its direction. DP &lt; 200 low, 200–399 intermediate, ≥ 400 high (VU).",
       "Wind tab", "Fryberger &amp; Dean 1979", USED],
-    ["Prevailing erosive direction", "sector k with max 0.5 E<sub>k−1</sub> + E<sub>k</sub> + 0.5 E<sub>k+1</sub>", "16 sectors of 22.5°. Barrier and strip rows run at that direction + 90°.", "Wind tab, Practices", "App", USED],
+    ["Prevailing erosive direction", "sector k with max 0.5 E<sub>k−1</sub> + E<sub>k</sub> + 0.5 E<sub>k+1</sub>", "16 sectors of 22.5°. Barrier and strip rows run at that direction + 90°. None when no hour reaches the threshold.", "Wind tab, Practices", "App", USED],
     ["Resultant transport direction", "atan2( Σ E sin(θ + 180°), Σ E cos(θ + 180°) )", "θ: direction the wind blows from.", "Wind tab", "App", USED],
     ["Trend", "b = Σ(x − x̄)(y − ȳ) / Σ(x − x̄)²,&nbsp; t = b / SE(b)", "y: erosive hours per year; x: year. Significant if |t| &gt; t<sub>0.975, n−2</sub>.", "Wind tab", "Ordinary least squares", USED],
     ["Calibration to the nearest station (quantile mapping)", "u′ = F<sup>−1</sup><sub>obs, m</sub>( F<sub>model, m</sub>(u) )",
@@ -119,25 +124,55 @@ WG.methods = (function () {
       "FAO-56 Eqs. 6–21 and 37–40 with POWER T<sub>max</sub>, T<sub>min</sub>, dew point, 2 m wind and all-sky solar radiation R<sub>s</sub> (MJ m⁻² d⁻¹). At Lubbock it runs 5% above gridMET (1,984 vs 1,886 mm/yr) with the same monthly pattern.",
       "When gridMET fails", "Allen et al. 1998 (FAO-56)", FALLBACK],
     ["Hargreaves ET₀", "ET₀ = 0.0023 (R<sub>a</sub> / 2.45)(T + 17.8) √(T<sub>max</sub> − T<sub>min</sub>)", "R<sub>a</sub>: extraterrestrial radiation, FAO-56 Eq. 21; T in °C.",
-      "Only for NASA POWER days missing radiation, dew point or wind", "Hargreaves &amp; Samani 1985", FALLBACK],
+      "Only for days of NASA POWER or your weather file missing radiation, dew point or wind", "Hargreaves &amp; Samani 1985", FALLBACK],
   ];
 
   const SOIL = [
     ["Wilting point (Saxton &amp; Rawls)", "θ₁₅₀₀ₜ = −0.024S + 0.487C + 0.006OM + 0.005 S·OM − 0.013 C·OM + 0.068 S·C + 0.031;&nbsp; θ₁₅₀₀ = θ₁₅₀₀ₜ + (0.14 θ₁₅₀₀ₜ − 0.02)",
-      "S, C: sand and clay fractions; OM: % (capped at 8).", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
+      "S, C: sand and clay fractions (scaled to 1 together if above); OM: % (capped at 8). Kept physical: θ₁₅₀₀ ≥ 0.01, θ₃₃ ≥ θ₁₅₀₀ + 0.01, θ<sub>S</sub> ≥ θ₃₃ + 0.01, with ρ<sub>B</sub> and K<sub>s</sub> from these.", "Edited surface layer; blanks in your own soil", "Saxton &amp; Rawls 2006", USED],
     ["Field capacity", "θ₃₃ₜ = −0.251S + 0.195C + 0.011OM + 0.006 S·OM − 0.027 C·OM + 0.452 S·C + 0.299;&nbsp; θ₃₃ = θ₃₃ₜ + (1.283 θ₃₃ₜ² − 0.374 θ₃₃ₜ − 0.015)", "", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
     ["Saturation", "θ<sub>S−33t</sub> = 0.278S + 0.034C + 0.022OM − 0.018 S·OM − 0.027 C·OM − 0.584 S·C + 0.078;&nbsp; θ<sub>S−33</sub> = θ<sub>S−33t</sub> + (0.636 θ<sub>S−33t</sub> − 0.107);&nbsp; θ<sub>S</sub> = θ₃₃ + θ<sub>S−33</sub> − 0.097S + 0.043", "", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
     ["Bulk density", "ρ<sub>B</sub> = (1 − θ<sub>S</sub>) × 2.65", "g/cm³.", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
     ["Saturated conductivity", "B = (ln 1500 − ln 33) / (ln θ₃₃ − ln θ₁₅₀₀);&nbsp; K<sub>s</sub> = 1930 (θ<sub>S</sub> − θ₃₃)<sup>3 − 1/B</sup>", "K<sub>s</sub> in mm/h.", "Edited surface layer", "Saxton &amp; Rawls 2006", USED],
-    ["Plant-available water", "AWC = DUL − LL", "cm³/cm³; shown as in/ft.", "Soil tab", "—", USED],
+    ["Plant-available water", "AWC = DUL − LL", "cm³/cm³; shown in the AWC unit of the units table.", "Soil tab", "—", USED],
     ["Organic carbon; total N", "OC = OM / 1.724;&nbsp; N ≈ OC / 10, at most 0.5%", "%.", "Soil profile, .SOL export", "Van Bemmelen factor; DSSAT convention", USED],
     ["Saturation check", "SAT = <code>wsatiated_r</code>/100, else Saxton–Rawls, else 1 − ρ<sub>B</sub>/2.65;&nbsp; SAT ≥ DUL + 0.01", "", "Soil profile", "DSSAT convention", USED],
     ["Unit conversions", "K<sub>sat</sub> (cm/h) = µm/s × 0.36 · coarse fragments = 100 − % passing #10 sieve", "", "Soil profile", "—", USED],
     ["Root growth factor", "SRGF = 1 (layer ending ≤ 15 cm), else exp(−0.02 × mid-depth); 0 below a restrictive layer", "Depth in cm.", "Soil profile, .SOL export", "DSSAT convention", USED],
-    ["Stage-1 evaporation limit", "U = min(9.9, 5 + 0.15 (clay + 2))", "U in mm; clay %.", ".SOL export", "Ritchie; DSSAT tools", USED],
+    ["Stage-1 evaporation limit", "U = 4 for sand and loamy sand · 8 for clay, silty clay and sandy clay · 6 for the other classes", "U in mm, by the surface texture class.", "DSSAT, APSIM files", "HC27 generic soils (Han et al. 2019); CSM default 6", USED],
     ["Drainage rate", "very poorly 0.01 · poorly 0.05 · somewhat poorly 0.25 · moderately well 0.40 · well 0.60 · somewhat excessively 0.75 · excessively 0.85", "Fraction per day.", ".SOL export", "DSSAT convention", USED],
     ["Runoff curve number", "A 61/64/68/71 · B 73/76/80/83 · C 81/84/88/91 · D 84/87/91/94", "By hydrologic group (second letter of dual groups) and slope 0–2, 2–5, 5–10, &gt; 10%.", ".SOL export", "NRCS NEH Part 630; DSSAT", USED],
     ["Slope and aspect from the DEM", "slope = 100 √(g<sub>x</sub>² + g<sub>y</sub>²),&nbsp; g<sub>x</sub> = (z<sub>E</sub> − z<sub>W</sub>) / 2Δx,&nbsp; aspect = atan2(−g<sub>x</sub>, −g<sub>y</sub>)", "Elevations 100 m N, S, E and W of the point.", "Header, soil profile", "Finite differences", USED],
+  ];
+
+  /* model files from the data sheet: [quantity, equation, terms, used for, source, status] */
+  const FILES = [
+    ["Daily weather (gridMET)", "T = K − 273.15;&nbsp; R<sub>s</sub> (MJ/m²/d) = W/m² × 0.0864;&nbsp; e<sub>a</sub> = q p / (0.622 + 0.378 q);&nbsp; u₂ = 0.748 u₁₀",
+      "q: specific humidity; p: air pressure from elevation (FAO-56 Eq. 7). ET₀ = gridMET's grass reference (ASCE standardized).", "All model files", "Abatzoglou 2013; Allen et al. 1998", USED],
+    ["Daily weather (NASA POWER or your file)", "ET₀ by FAO-56 Penman–Monteith; Hargreaves (Eq. 52) on days without radiation, dew point or wind",
+      "Your file: °C/°F, mm/in, MJ/W/langley/kWh, m/s/mph/km/h/kn; wind at any height moved to 10 and 2 m with the log law (z₀ = 0.03 m). Excel is read as stored values; blank or text cells and codes of −99 or below are missing; “T” rain is 0; columns are found by name and the sheet lists them; a Campbell TOA5 daily record stamped at midnight is the day before. ET₀ is the file's own grass-reference column where it has one (never ETr, pan evaporation or PET), else FAO-56 from its columns after any gap filling, with R<sub>s</sub> from the temperature range (Eq. 50) on days without it and Hargreaves on days without humidity or wind; the README counts the days. gridMET's ET₀ is not copied in.", "All model files", "Allen et al. 1998", USED],
+    ["Dates", "the chosen dates, cut to the source's record", "gridMET 1979 to about 2 days ago; NASA POWER 1981 to about 8 days ago; your file its own days, unless gaps are filled from gridMET. The status line and README say when dates were left out.", "All model files", "App", USED],
+    ["Humidity from relative humidity", "e<sub>a</sub> = [e°(T<sub>min</sub>) RH<sub>max</sub> + e°(T<sub>max</sub>) RH<sub>min</sub>] / 200, else e<sub>a</sub> = RH<sub>mean</sub>/100 × [e°(T<sub>max</sub>) + e°(T<sub>min</sub>)] / 2",
+      "e°(T) = 0.6108 exp(17.27 T / (T + 237.3)) kPa; dew point from e<sub>a</sub>.", "Your weather file", "FAO-56 Eqs. 11, 17, 19", USED],
+    ["Values taken as missing", "rain, R<sub>s</sub>, humidity, vapour pressure or wind &lt; 0;&nbsp; R<sub>s</sub> &gt; 50 MJ/m²;&nbsp; T outside −60…60 °C;&nbsp; T<sub>max</sub> = T<sub>min</sub> = 0",
+      "Undeclared missing-value codes (−99.9, −996 …) show up this way; each README counts them.", "All model files", "App", USED],
+    ["Gaps (DSSAT, APSIM, AquaCrop)", "T<sub>max</sub>, T<sub>min</sub>, wind: linear between neighbouring days;&nbsp; R<sub>s</sub> = 0.16 √(T<sub>max</sub> − T<sub>min</sub>) R<sub>a</sub>;&nbsp; rain 0;&nbsp; ET₀ by FAO-56",
+      "These models stop on a missing value. Their files run from the first to the last day with both T<sub>max</sub> and T<sub>min</sub>; linear filling reaches 3 days past the data, and a longer run of wind at either end takes that calendar month's mean over the days written (the overall mean if the month has none). Each folder's README counts the filled days. SWAT+, EPIC and APEX get their missing-value code and generate those days.", "DSSAT, APSIM, AquaCrop files", "FAO-56 Eqs. 21, 50", USED],
+    ["TAV and AMP", "monthly means of (T<sub>max</sub> + T<sub>min</sub>)/2;&nbsp; TAV = mean of the 12;&nbsp; AMP = warmest − coldest month",
+      "DSSAT pools all years (as CSM and its official files do); APSIM averages complete calendar years. When the dates do not cover every month, 10 complete years are read for these and for the generator statistics; if that read fails, they come from the months the dates have, marked approximate.", "DSSAT .WTH, APSIM .met", "DSSAT-CSM 4.8; APSIM tav_amp", USED],
+    ["Weather-generator statistics", "per month: mean and SD of T<sub>max</sub>, T<sub>min</sub>; rain mean, SD, skew; P(W|D), P(W|W); wet days; mean solar, humidity, wind",
+      "EPIC/APEX: wet day &gt; 0 mm, as WXPM3020 (matches its output within 0.001). SWAT+: wet day ≥ 0.1 mm; max half-hour rain = a third of each month's largest daily rain. Each group comes from the chosen dates when every month has 20+ days of it, else from 10 complete years with 20+, else from the dates with 10+, else from the 10 years with 10+ (these last two with a note); otherwise the files are not written rather than written with zeros. Rain totals and wet days are per whole month.", ".WP1, weather-wgn.cli", "WXPM3020; SWAT+ IO", USED],
+    ["Wind height", "DSSAT, APSIM: u₂ (2 m);&nbsp; SWAT+: u<sub>1.7</sub> = u₁₀ × 0.17<sup>0.2</sup> = 0.70 u₁₀;&nbsp; EPIC, APEX: u₁₀",
+      "DSSAT WIND in km/day (m/s × 86.4).", "All weather files", "FAO-56; SWAT theory 1:1.4", USED],
+    ["CO₂ (APSIM)", "NOAA Mauna Loa annual mean, 1979–2025; +2.5 ppm a year after", "APSIM Next Gen assumes 350 ppm without it. DSSAT and AquaCrop use their own Mauna Loa files.", "APSIM .met", "NOAA GML", USED],
+    ["Soil layers", "custom layer = Σ w<sub>i</sub> x<sub>i</sub> / Σ w<sub>i</sub>;&nbsp; K<sub>sat</sub> = Σ w<sub>i</sub> / Σ (w<sub>i</sub> / K<sub>i</sub>)",
+      "w<sub>i</sub>: overlap (cm) with horizon i. Usual layers: DSSAT splits the horizons at 5, 15, 30, 45, 60, 90, 120, 150, 180, 210 cm; APSIM 150, 150, 300 … mm; AquaCrop ≤ 5, APEX ≤ 10, EPIC ≤ 15 (thinnest neighbours merged). The profile ends at the first horizon without water retention or bulk density; a profile that simply stops is extended with its deepest horizon.", "All soil files", "App", USED],
+    ["DSSAT soil ID", "WG + 8-digit component key (unedited survey soil, usual layers);&nbsp; else WG + 8 characters from the written soil table",
+      "DSSAT runs the first profile in WG.SOL with a matching ID, so other layers or values always get another ID.", "DSSAT WG.SOL", "App", USED],
+    ["APSIM soil limits", "SAT ≤ 1 − BD/2.65 − 0.001;&nbsp; AirDry = 0.5 LL15 (top layer);&nbsp; KS = K<sub>sat</sub> × 24 mm/day", "Crop KL 0.06 down to 0.01 with depth, XF 1 (0 below a restrictive layer); initial water at DUL.", "APSIM .apsimx", "ApsimX Soil.Check; apsimx R package", USED],
+    ["AquaCrop soil", "CN: A 46 · B 61 · C 72 · D 77;&nbsp; REW = round(10 (FC − WP/2) × 0.04), 0–15;&nbsp; CRa, CRb from the soil class", "FC, WP, SAT in vol %; K<sub>sat</sub> mm/day; gravel 0 (survey water contents are whole-soil).", "AquaCrop .SOL", "AquaCrop 7.3 manual, Tables 2.14d, 2.24s", USED],
+    ["USLE K for your own soil (SWAT+)", "K = f<sub>csand</sub> f<sub>cl-si</sub> f<sub>orgc</sub> f<sub>hisand</sub>", "Used when a layer has no survey K; sand, silt, clay %, organic C %.", "SWAT+ soils.sol", "Williams 1995; SWAT theory 4:1.1", USED],
+    ["Figure files", "pixels = inches × DPI;&nbsp; PNG pHYs, JPEG JFIF density and TIFF resolution tags carry the DPI", "Fonts in points (1 pt = DPI/72 pixels). TIFF: baseline RGB, PackBits.", "Figure downloads", "PNG 3rd ed.; JFIF 1.02; TIFF 6.0", USED],
   ];
 
   /* [number on screen, its scale, what it means]: so no value reads as a score out of 100. */
@@ -156,8 +191,8 @@ WG.methods = (function () {
         "How strongly wind speed and dryness drive erosion: C = 34.483 v³ / PE². Higher is windier or drier."],
       ["<b>Tolerable soil loss T</b>", "1–5 t/ac/yr", "The most a soil can lose each year without losing productivity (SSURGO); deep soils are 5."],
       ["<b>Erodibility index EI</b> = C·I/T", "0 and up; 8 or more = highly erodible land", "The USDA wind criterion for highly erodible land (7 CFR 12.21), with C as a fraction."],
-      ["<b>Erosive wind hours</b>", "0–8,760 h/yr", "Hours a year with 10 m wind at or above the erosive threshold (18 mph by default, adjustable on the Wind tab)."],
-      ["<b>Month strip</b> (Overview)", "share of the year's risk: red ≥ 10%, amber ≥ 6.7%", "Erosive wind energy × dryness in each month, as a share of the year's total."],
+      ["<b>Erosive wind hours</b>", "0–8,760 h/yr", `Hours a year with 10 m wind at or above the erosive threshold (${WG.units.fmt("wind", 8, ["m/s", "kn"].includes(WG.units.sym("wind")) ? 1 : 0)} by default, adjustable on the Wind tab).`],
+      ["<b>Month strip</b> (Overview)", "share of the year's risk: red ≥ 10%, amber ≥ 6.7%", "Erosive wind energy × dryness in each month, as a share of the year's total. A period that does not cover all 12 months is not ranked: its months are gray."],
       ["<b>Sand drift potential DP</b> (Wind tab)", "vector units: &lt; 200 low · 200–399 intermediate · ≥ 400 high", "Fryberger &amp; Dean 1979; RDP/DP below 0.3 multidirectional, 0.3–0.8 intermediate, above 0.8 one direction."],
     ];
   }
@@ -182,6 +217,7 @@ WG.methods = (function () {
       <p class="fine">“Direct” means the app downloads from the agency that produces the data. Every default source is direct. Open-Meteo is only a backup: for hourly wind when NASA POWER errors or has not answered within 20 s, for daily weather when gridMET and NASA POWER both fail, and for elevation when USGS fails. You can still pick <b>ECMWF (Open-Meteo copy)</b> under Model on the Wind tab; Copernicus's own data store needs each user's personal key and a queued job that takes minutes. At Lubbock, ECMWF tracks the airport hour by hour slightly better (r = 0.80 against 0.71 for MERRA-2), and after calibration both give 1,291–1,295 erosive h/yr, Feb–Apr, from the WSW.</p>
       <section id="m-site"><h4>This location</h4>${siteHTML()}</section>
       <section id="m-scales"><h4>Classes and scales</h4>${table(["Number on screen", "Scale", "What it means"], scaleRows(), "scales")}
+        <p class="fine">Every number follows the units table (the ruler button on the map). Classes keep the units they are defined in (E and I in t/ac/yr, NRCS practice specifications in US units) and are converted for display; model files always use each model's own units.</p>
         <h4>Wind Erodibility Groups</h4>${table(["WEG", "Texture guide", "I, t/ac/yr"], wegRows(), "weg")}
         <p class="fine">For a named soil, NRCS uses the group recorded in the soil survey; the texture guide is for soils that are not identified (${A("https://efotg.sc.egov.usda.gov/references/public/TX/Wind_Erosion.pdf", "National Agronomy Manual, Part 502")}). So a soil's group can differ from what its texture suggests: Pullman clay loam, for example, is WEG 7. The app shows the survey's group, and uses the guide only when you edit the surface layer. Texture guide: USDA-NRCS ${A("https://directives.nrcs.usda.gov/sites/default/files2/1725389517/Part%20618%20Subpart%20B%20%E2%80%93%20Exhibits.pdf", "National Soil Survey Handbook, Part 618 Subpart B")}, §618.93 (amended August 2024). Calcareous: strong or violent fizzing of the fine earth in cold dilute (1N) HCl. Rock fragments move a soil to a less erodible group, meaning the next lower I (86 → 56): one group at 15–35% by volume, two at 35–60%, I = 0 above 60% (sands and loamy sands move less).</p></section>
       <section id="m-sources"><h4>Data sources</h4>${table(["Data", "Producer", "How the app reads it", "Resolution · period", "If it fails"], SOURCES, "sources")}
@@ -197,6 +233,8 @@ WG.methods = (function () {
       <section id="m-erod"><h4>Erodibility equations</h4>${table(EQ_COLS, eqRows(EROD), "eqs")}</section>
       <section id="m-wind"><h4>Wind and climate equations</h4>${table(EQ_COLS, eqRows(WIND), "eqs")}</section>
       <section id="m-soil"><h4>Soil water and profile equations</h4>${table(EQ_COLS, eqRows(SOIL), "eqs")}</section>
+      <section id="m-files"><h4>Model files and downloads</h4>${table(EQ_COLS, eqRows(FILES), "eqs")}
+        <p class="fine">The data sheet writes DSSAT 4.8, SWAT+ (and the SWAT2012 text format), EPIC 1102, APEX 1501, APSIM Next Gen / 7.10 and AquaCrop 7 files. Their layouts were checked against each model's manual, official example files and the reading code of its source; the files have not been run in the models here.</p></section>
       <p class="fine">Full derivations and references: docs/METHODS.md and docs/RESEARCH.md in the ${A("https://github.com/barsa1ly/windguard-tx", "project repository")}.</p>`;
   }
 

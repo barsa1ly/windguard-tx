@@ -238,7 +238,7 @@ WG.soil = (function () {
      so a soil's group can differ from its texture (Pullman clay loam is WEG 7). Label a soil's group by number and I only.
      I: wind erodibility index, t/ac/yr: loss from a wide, bare, smooth field in the climate of Garden City, KS. */
   const WEG_INFO = [
-    { g: "1", name: "sands", I: "160–310", def: "Very fine sand, fine sand, sand or coarse sand. I runs from 160 for coarse sand to 310 for very fine sand (220 on average)." },
+    { g: "1", name: "sands", I: "160–310", def: "Very fine sand, fine sand, sand or coarse sand. I runs from 160 t/ac/yr for coarse sand to 310 for very fine sand (220 on average)." },
     { g: "2", name: "loamy sands", I: "134", def: "Loamy very fine sand, loamy fine sand, loamy sand, loamy coarse sand; very fine sandy loam and silt loam with 5% clay or less; sapric (well-decomposed) organic material." },
     { g: "3", name: "sandy loams", I: "86", def: "Very fine sandy loam with more than 5% clay, fine sandy loam, sandy loam, coarse sandy loam; noncalcareous silt loam with 20–50% very fine sand and 5–12% clay." },
     { g: "4", name: "clays", I: "86", def: "Clay, silty clay; noncalcareous clay loam and silty clay loam with more than 35% clay (except iron-rich soils)." },
@@ -252,10 +252,16 @@ WG.soil = (function () {
   const wegInfo = g => WEG_BY[g] || null;
 
   /* ---------------- Saxton & Rawls (2006) ----------------
-     sand, clay in %, om in % (capped at 8). Returns volumetric fractions, g/cm3, mm/h. */
+     sand, clay in % (0–100), om in % (capped at 8). Returns volumetric fractions, g/cm3, mm/h. Outside the soils they
+     were fitted to the equations give impossible values (nearly pure sand: a negative wilting point; much clay with
+     much OM: field capacity below the wilting point), so the wilting point is at least LL_MIN, field capacity and
+     saturation each at least 0.01 above the one before, and bulk density and Ksat come from those bounded values. */
+  const LL_MIN = 0.01; // cm3/cm3: the least water a soil is taken to hold at 15 bar (coarse sand holds about this)
   function saxtonRawls(sandPct, clayPct, omPct) {
-    if (sandPct === null || clayPct === null) return null;
-    const S = sandPct / 100, C = clayPct / 100, OM = Math.min(Math.max(omPct ?? 1, 0), 8);
+    if (!Number.isFinite(sandPct) || !Number.isFinite(clayPct)) return null;
+    // fractions of the fine earth, at most 1 together: the equations hold only for real mixes
+    const s0 = Math.max(sandPct, 0), c0 = Math.max(clayPct, 0), sum = Math.max(s0 + c0, 100), S = s0 / sum, C = c0 / sum;
+    const OM = Math.min(Math.max(Number.isFinite(omPct) ? omPct : 1, 0), 8);
     const t1500t = -0.024 * S + 0.487 * C + 0.006 * OM + 0.005 * S * OM - 0.013 * C * OM + 0.068 * S * C + 0.031;
     const t1500 = t1500t + (0.14 * t1500t - 0.02);
     const t33t = -0.251 * S + 0.195 * C + 0.011 * OM + 0.006 * S * OM - 0.027 * C * OM + 0.452 * S * C + 0.299;
@@ -263,17 +269,19 @@ WG.soil = (function () {
     const ts33t = 0.278 * S + 0.034 * C + 0.022 * OM - 0.018 * S * OM - 0.027 * C * OM - 0.584 * S * C + 0.078;
     const ts33 = ts33t + (0.636 * ts33t - 0.107);
     const ts = t33 + ts33 - 0.097 * S + 0.043;
-    const bd = (1 - ts) * 2.65;
-    const B = (Math.log(1500) - Math.log(33)) / (Math.log(t33) - Math.log(t1500));
-    const ks = 1930 * Math.pow(Math.max(ts - t33, 0), 3 - 1 / B);
-    return { ll: t1500, dul: t33, sat: ts, bd, ksat: ks, awc: t33 - t1500 };
+    const ll = Math.max(t1500, LL_MIN), dul = Math.max(t33, ll + 0.01), sat = Math.max(ts, dul + 0.01);
+    const bd = (1 - sat) * 2.65;
+    const B = (Math.log(1500) - Math.log(33)) / (Math.log(dul) - Math.log(ll));
+    const ks = 1930 * Math.pow(sat - dul, 3 - 1 / B);
+    return { ll, dul, sat, bd, ksat: ks, awc: dul - ll };
   }
 
   /* ---------------- crop-model site parameters ---------------- */
+  // drainage rate (/day) by SSURGO drainage class in lower case; subaqueous soils (under water) as very poorly drained
   const DRAIN = {
     "excessively drained": 0.85, "somewhat excessively drained": 0.75, "well drained": 0.6,
     "moderately well drained": 0.4, "somewhat poorly drained": 0.25, "poorly drained": 0.05,
-    "very poorly drained": 0.01,
+    "very poorly drained": 0.01, subaqueous: 0.01,
   };
   const CN = { A: [61, 64, 68, 71], B: [73, 76, 80, 83], C: [81, 84, 88, 91], D: [84, 87, 91, 94] };
 
@@ -324,14 +332,21 @@ WG.soil = (function () {
     });
   }
 
+  /* stage-1 evaporation limit (mm) by DSSAT texture class: the HC27 generic soils used for the DSSAT SoilGrids
+     profiles (Han et al. 2019) give sand 4, loam 6, clay 8; CSM's own default is 6 */
+  const slu1 = tex => (["S", "LS"].includes(tex) ? 4 : ["C", "SIC", "SC"].includes(tex) ? 8 : 6);
+
   function siteParams(soil, comp, surface) {
     const slope = num(comp.slope_r) ?? num(soil.mapunit.slopegraddcp);
+    const h0 = comp.horizons[0] || {};
+    const tex = textureClass(surface?.sand ?? num(h0.sandtotal_r), surface?.silt ?? num(h0.silttotal_r), surface?.clay ?? num(h0.claytotal_r));
     const restr = comp.restrictions.find(r => num(r.resdept_r) !== null);
     const layers = comp.horizons;
     const depth = layers.length ? num(layers[layers.length - 1].hzdepb_r) : null;
     return {
       albedo: num(comp.albedodry_r),
-      u: Math.min(9.9, 5 + 0.15 * ((surface?.clay ?? 10) + 2)),
+      u: slu1(tex),
+      tex,
       drainRate: DRAIN[(comp.drainagecl || "").toLowerCase()] ?? null,
       cn: curveNumber(comp.hydgrp, slope),
       slope,
@@ -375,28 +390,6 @@ WG.soil = (function () {
     return meta.concat([head.join(",")], rows).join("\n");
   }
 
-  function toSOL(soil, layers, site, idNum = 1) {
-    const f = (v, w, d) => (v === null || v === undefined || isNaN(v) ? "-99" : Number(v).toFixed(d)).padStart(w);
-    const s = (v, w) => String(v ?? "-99").slice(0, w).padStart(w);
-    const id = ("WG" + String(idNum).padStart(8, "0")).slice(0, 10);
-    const comp = soil.dominant;
-    const tex = soil.surface?.texCode || "-99";
-    const depth = site.depth ?? layers.reduce((m, l) => Math.max(m, l.bot || 0), 0);
-    const desc = (soil.mapunit.muname || comp.compname || "").slice(0, 50);
-    const siteName = (soil.county || soil.mapunit.areaname || "Texas").replace(/,.*$/, "").slice(0, 11);
-    const out = [];
-    out.push(`*${id}  ${"SSURGO".padEnd(11)} ${tex.padEnd(5)} ${f(depth, 5, 0)} ${desc}`);
-    out.push(`@SITE        COUNTRY          LAT     LONG SCS FAMILY`);
-    out.push(` ${siteName.padEnd(11)} ${"USA".padEnd(11)} ${f(soil.lat, 8, 3)} ${f(soil.lon, 8, 3)} ${(site.family || "").slice(0, 50)}`);
-    out.push(`@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE`);
-    out.push(` ${s("-99", 5)} ${f(site.albedo, 5, 2)} ${f(site.u, 5, 1)} ${f(site.drainRate, 5, 2)} ${f(site.cn, 5, 0)} ${f(1, 5, 2)} ${f(1, 5, 2)} ${s("IB001", 5)} ${s("IB001", 5)} ${s("IB001", 5)}`);
-    out.push(`@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC`);
-    layers.forEach(l => {
-      out.push(` ${f(l.bot, 5, 0)} ${s((l.hz || "-99").slice(0, 5), 5)} ${f(l.ll, 5, 3)} ${f(l.dul, 5, 3)} ${f(l.sat, 5, 3)} ${f(l.srgf, 5, 3)} ${f(l.ksat, 5, 2)} ${f(l.bd, 5, 2)} ${f(l.oc, 5, 2)} ${f(l.clay, 5, 1)} ${f(l.silt, 5, 1)} ${f(l.cf, 5, 1)} ${f(l.ni, 5, 3)} ${f(l.ph, 5, 1)} ${s("-99", 5)} ${f(l.cec, 5, 1)} ${s("-99", 5)}`);
-    });
-    return `*SOILS: WindGuard TX export (${new Date().toISOString().slice(0, 10)})\n\n` + out.join("\n") + "\n";
-  }
-
   /* RWEQ surface-soil factors (Fryrear et al. 1994, 1998): erodible fraction EF (dry aggregates < 0.84 mm) and soil
      crust factor SCF, from sand, silt, clay, OM and CaCO3 in %. inRange: inputs inside the 57 soils the equations were fitted to. */
   function rweq(sf) {
@@ -411,5 +404,5 @@ WG.soil = (function () {
   }
 
   return { fetchSoil, parseTexture, textureClass, refineCode, wegFromSurface, saxtonRawls, profileLayers, siteParams,
-    rweq, toCSV, toSOL, TEX, FAMILY, WEG_I, WEG_INFO, wegInfo, curveNumber };
+    rweq, toCSV, slu1, TEX, FAMILY, WEG_I, WEG_INFO, wegInfo, curveNumber, DRAIN };
 })();

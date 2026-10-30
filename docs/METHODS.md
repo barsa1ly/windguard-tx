@@ -41,7 +41,7 @@ The app computes Wind Erosion Equation (WEQ) step E3 for a bare, smooth (K = 1),
 |---|---|---|---|---|
 | < 10 | 10–40 | 40–80 | 80–150 | ≥ 150 |
 
-The class edges correspond to roughly 2, 8, 16 and 30 times T = 5. They are app conventions, not NRCS classes. The risk card shows all five classes under the headline with the site's class lit, and says that E is an amount (t/ac/yr), not a score.
+The class edges correspond to roughly 2, 8, 16 and 30 times T = 5. They are app conventions, not NRCS classes. The risk card shows all five classes under the headline with the site's class lit, and says that E is an amount (t/ac/yr), not a score. The exact E is classed in every display unit; where rounding would carry a value across an edge it is shown with one more decimal (39.56 t/ac/yr reads 39.6, Moderate, not 40). In t/ha/yr the edges read 22.4, 90, 179.3 and 336.3: an edge label is a whole number unless rounding would lower it.
 
 **Scales of the other numbers on screen** (each is shown next to its value):
 
@@ -101,7 +101,11 @@ For a named soil, NRCS uses the group recorded in the soil survey; the texture g
 
 ## 3. Wind climatology at the point (Wind tab)
 
-**Data:** for the last 5, 10 or 20 complete years:
+**Period:** the last 5, 10 or 20 complete calendar years, or your own dates. MERRA-2 runs from 2001 and ECMWF from 1979, both up to a few days ago (about 8 and 3 days). Your own dates need 30 days or more inside the chosen model's record, with 20 or more of them in one calendar month; dates partly outside the record are cut to it, with a message, and fewer than 30 days inside it are refused. A shared or typed link whose dates cannot be analysed says why and shows the last 10 years; dates that only the other model holds switch to it. A day runs midnight to midnight CST (UTC−6). Months are averaged by weight, so an uneven period does not tilt the year: a month needs 480 hours or more to count, yearly totals are shown only when all 12 months are covered, a calendar year counts as complete at 90% of its hours, and the trend needs 5 complete years. Calibration trains on at least 3 years around the period, inside the model's record (widened forward when the record starts too late). The page address keeps the period (`&from=YYYY-MM-DD&to=YYYY-MM-DD`, or `&period=5` or `20`) and, when the model is not MERRA-2, `&model=ecmwf`, so a shared link redoes the same analysis.
+
+**If the chosen model fails,** the other one analyses the same dates when its record holds them. Otherwise a preset period is worked out again for it (and the airport looked up again), and custom dates are cut to its record; with fewer than 30 days left, or no month with 20 days, the first model's error is shown.
+
+**Data:** for the chosen period:
 - **Hourly 10 m wind speed and direction.** You choose the gridded model on the Wind tab, and each model is the other's automatic fallback: when the chosen source returns an error or has not started answering within 20 s (both normally answer in 1–3 s), the app switches; once data is arriving, a slow download is allowed up to 90 s.
   - **NASA MERRA-2 (default):** the NASA POWER hourly API, direct, UTC, at 0.5° × 0.625°. It has no gust variable.
   - **ECMWF (backup or option):** the Open-Meteo archive `best_match`, which is ECMWF IFS analysis at 9 km from 2017 on and ERA5 at 0.25° (~28 km) before 2017. ERA5-Land does not supply wind here. Daily max gust comes with it.
@@ -112,7 +116,7 @@ For a named soil, NRCS uses the group recorded in the soil survey; the texture g
 **Calibration to the nearest station (default):**
 - **Station data:** routine hourly METARs (FM-15: 2-minute mean wind at 10 m, plus gusts) from NOAA NCEI GHCNh, one request per year. The report nearest each whole hour is kept, and NCEI quality codes 2, 3, 6 and 7 (suspect or erroneous) are dropped. Stations without a GHCNh id, or with GHCNh coverage below the threshold, use the Iowa Environmental Mesonet ASOS archive.
 - **Quality control:** sustained wind > 40 m/s or gust > 55 m/s is dropped. Hobbs, for example, has 250-kt garbled reports that otherwise dominate cubic energy sums.
-- **Station choice:** the nearest airport within 150 km with data from the start year and ≥ 60% of hours. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km handicap, because in West Texas several AWOS anemometers (Seminole, Andrews, Snyder, Pecos) read 40–60% fewer erosive hours than nearby ASOS. You can pick another station in the Wind tab.
+- **Station choice:** the nearest airport within 150 km with ≥ 60% of hours over its training window and over the period. NWS/FAA ASOS sites rank ahead of AWOS by a 100 km handicap, because in West Texas several AWOS anemometers (Seminole, Andrews, Snyder, Pecos) read 40–60% fewer erosive hours than nearby ASOS. You can pick another station in the Wind tab.
 - **Method:** monthly empirical quantile mapping. It is trained on the same gridded model at the station's grid cell versus the station on the same hours, using 101 quantiles between 0.1% and 99.9%, with end ratios beyond those. It is then applied to reanalysis at the site, so the model's site-vs-station difference is kept. Daily max gusts are mapped the same way against station daily max gusts; with MERRA-2, which has no gusts, the model's daily max hourly wind is mapped onto station gusts. Direction and timing stay from the model.
 - **Other sources you can select:** "Airport station only" (rain and ET₀ still from gridMET) and "Gridded model only".
 - **Check, Lubbock 2016–2025:** reanalysis vs LBB mean wind 4.41 vs 5.24 m/s, hourly r = 0.80, RMSE 1.85 m/s. Erosive hours (≥ 8 m/s) were 5.3% vs 15.1%.
@@ -185,6 +189,7 @@ With gridMET moisture, the Lubbock calibrated high-risk months are Feb–Apr. Ma
   - **Red** (high risk): share ≥ 10% (vs. 8.3% if spread evenly).
   - **Amber**: share ≥ 6.7%.
   - These cut-offs are an app convention.
+  - Red, amber and high-risk months are given only for a period covering all 12 months. With fewer, the shares are of the months covered, no month is ranked (they show gray), and Practices uses the typical Feb–May windy season, labelled as such.
 
 **Gust days:** daily max gust ≥ 17.9 m/s (40 mph). Shown as n/a for uncalibrated MERRA-2, and for a tower calibration with no airport within 150 km.
 
@@ -195,7 +200,7 @@ With gridMET moisture, the Lubbock calibrated high-risk months are Feb–Apr. Ma
 - DP classes: low < 200, intermediate 200–399, high ≥ 400 VU.
 - RDP/DP: multidirectional < 0.3, intermediate < 0.8, unidirectional ≥ 0.8.
 
-**Prevailing erosive wind** is the 22.5° sector carrying the most erosive energy Σu²(u − uₜ), smoothed with half weight on its neighbors. Barrier and strip orientation is that direction plus 90°.
+**Prevailing erosive wind** is the 22.5° sector carrying the most erosive energy Σu²(u − uₜ), smoothed with half weight on its neighbors. Barrier and strip orientation is that direction plus 90°. There is none when no hour reaches the threshold.
 
 **Trend:** ordinary least-squares slope of erosive hours per year, with a two-sided t-test at 95%.
 
@@ -216,14 +221,16 @@ Airport anemometers sit on open, mown ground (mesonet towers should too; the exp
 | SSKS (cm/h) | `ksat_r` (µm/s) × 0.36 |
 | SLOC | OM/1.724 |
 | SLNI | SLOC/10, capped at 0.5% |
-| SLCF | 100 − `sieveno10_r` |
+| SLCF | coarse fragments > 2 mm, % by weight of the whole soil: `frag3to10_r` + `fraggt10_r` plus the gravel the No. 10 sieve holds back |
 | SRGF | 1 for layers ending ≤ 15 cm, else exp(−0.02 × mid-depth); 0 below a restrictive layer |
-| SLDR | By drainage class: very poorly 0.01, poorly 0.05, somewhat poorly 0.25, moderately well 0.40, well 0.60, somewhat excessively 0.75, excessively 0.85 |
+| SLDR | By drainage class: very poorly and subaqueous 0.01, poorly 0.05, somewhat poorly 0.25, moderately well 0.40, well 0.60, somewhat excessively 0.75, excessively 0.85 |
 | SLRO | Curve number by hydrologic group (the second letter of a dual group) and slope class (0–2, 2–5, 5–10, > 10%): A 61/64/68/71, B 73/76/80/83, C 81/84/88/91, D 84/87/91/94 |
-| SLU1 | min(9.9, 5 + 0.15 × (surface clay + 2)) mm (rcropmod; DSSAT default 6) |
+| SLU1 | 4 mm for sand and loamy sand, 8 for clay, silty clay and sandy clay, 6 for the other classes (the HC27 generic soils of the DSSAT SoilGrids profiles, Han et al. 2019; CSM's default is 6) |
 | SALB | SSURGO `albedodry_r` |
 
-**Edited surface layer:** water retention, bulk density and Ksat come from Saxton & Rawls (2006), using sand and clay fractions and OM % capped at 8.
+**Edited surface layer, and blanks in your own soil:** water retention, bulk density and Ksat come from Saxton & Rawls (2006), using sand and clay fractions and OM % capped at 8. The estimates are kept physical for any input: wilting point ≥ 0.01 cm³/cm³, field capacity ≥ wilting point + 0.01, saturation ≥ field capacity + 0.01, with bulk density (1 − θS) × 2.65 and Ksat from the bounded values; sand and clay that add up to more than 100 % are scaled to 100 %.
+
+The Soil tab's DSSAT download and the data sheet use the same writer (§7).
 
 **Slope and aspect** come from USGS 3DEP (1–10 m lidar/DEM) through the Elevation Point Query Service: elevation at 5 points about 100 m apart. slope = 100·√(gx² + gy²), aspect = atan2(−gx, −gy). Fallback: Copernicus 90 m DEM via Open-Meteo.
 
@@ -257,6 +264,44 @@ The rules are encoded in `js/practices.js` from `docs/RESEARCH.md`. Key threshol
 - **Grazing:** 25% harvest efficiency (≤ 33% in lesser prairie-chicken range). Drought checkpoints Apr 1, Jun 15, Jul 15, Aug 15, Nov 1 (TX 528).
 - **Seeding:** Feb 1/15–May 15, or the monsoon in the Trans-Pecos. Drill rows ≤ 12 in, ¼–½ in deep. Defer grazing ≥ 1 growing season (TX 550). TxDOT 2024 Item 164 district mixes; University Lands Permian mix.
 - **Shinnery and sand sagebrush:** tebuthiuron about 0.3 lb a.i./ac; treat ≤ 50% of the property per 2 years; 150-ft dune buffer; defer grazing 2 years (WAFWA).
+
+## 7. Model files and downloads (data sheet)
+
+The data sheet writes files for one location and a chosen date range. Every layout below was checked against the model's manual, its official example files and the reading code of its source (DSSAT-CSM 4.8.6 `IPWTH`/`IPSOIL`; SWAT+ rev 62 `cli_*`/`soil_db_read`; WXPM3020 and the EPIC/APEX user manuals; ApsimX `ApsimTextFile`, `Weather` and `Soil.Check`; AquaCrop 7.3 `LoadClim`/`LoadProfile`). A test runs every writer on 20 years of Lubbock weather and a SSURGO profile under each layering choice and passes all those checks. None of the files has been run in the models here. A model or table that cannot be made is replaced by a `NOT_WRITTEN.txt` giving the reason, and the rest of the zip is kept.
+
+**Weather sources.** Dates outside the chosen source's record are left out, and the status line and README say so: gridMET runs from 1979 to its last day (about 2 days ago), NASA POWER from 1981 to about 8 days ago, and your file covers its own days unless gaps are filled from gridMET.
+- gridMET (default): 9 variables from THREDDS for the chosen days. T = K − 273.15; Rs (MJ/m²/day) = W/m² × 0.0864; vapour pressure from specific humidity, ea = q p / (0.622 + 0.378 q), with p from elevation (FAO-56 Eq. 7); u₂ = 0.748 u₁₀; ET₀ is gridMET's grass reference.
+- NASA POWER daily: ET₀ by FAO-56 Penman–Monteith (Hargreaves, Eq. 52, on days without radiation, dew point or wind).
+- Your file: CSV, text or the first sheet of an Excel workbook (read as stored values: real dates, full precision, percentages as 0–100). The delimiter is the file's own (comma, semicolon or tab, with decimal commas where the comma is not the delimiter). Lines above the header row (NASA POWER, Open-Meteo, Campbell TOA5, PRISM, Daymet) are skipped. Units °C/°F, mm/in, MJ/W/langley/kWh, m/s/mph/km/h/kn; wind at any height is moved to 10 and 2 m with the log law (z₀ = 0.03 m). Blank or text cells and codes of −99 or below are missing, and "T" (trace) rain is 0. Vapour pressure comes from the dew point, else from RHmax and RHmin (FAO-56 Eq. 17), else from mean RH (Eq. 19); the dew point follows from it. Gaps can be filled from gridMET for the same days (not ET₀, which would not match your weather). ET₀ is the file's own grass-reference column where it has one (et0, ETo, ETos, reference ET; never ETr or alfalfa-reference, pan evaporation or PET; in the rain unit), else FAO-56 Penman–Monteith from its columns after any filling, with solar radiation from the temperature range (Eq. 50) on days without it and Hargreaves (Eq. 52) on days without humidity or wind. The zip's README counts the days of each.
+  - *Columns* are found by name, tried on the name without units and notes in brackets. An exact name beats a pattern, and either beats a second choice: a column with a duration shorter than a day ("Rain_60min" gives way to "Rain"; a day's, as in "Precip 24 Hour Total", says nothing) or rain named an accumulation or "since" a time. Other measurements under the same words are never read: battery, panel, soil, surface, dew-point and wet-bulb temperatures; times of extremes; rain rates, hourly or weekly amounts and normals; net, longwave and clear-sky radiation; wind directions, gusts, maxima and runs. The data sheet and the README list which header each quantity was read from, so a wrong match can be seen.
+  - *Dates* are chosen from the rows: a column of full dates first (YYYY-MM-DD, YYYYMMDD, also with a time run on as YYYYMMDDHHMM, or M/D/YYYY; D/M/YYYY when a first number in the column is above 12), else year, month and day, else year and day of the year, else any other column of full dates. "Day" holds the dates when "Time" holds clock times. A Campbell TOA5 daily record stamped at 00:00 holds the day before (2024-07-02 00:00:00 is 1 July). Impossible dates (30 February, month 13) are left out and noted.
+  - *Notes* on how the file was read appear in the sheet and the README: the TOA5 shift, rows left out, repeated days (the last row of each is used), trace rain, and rain that only ever rises, which looks like a running total.
+
+**Gaps.** DSSAT, APSIM and AquaCrop stop on a missing value, so their files get a gap-free copy. It runs from the first to the last day with both Tmax and Tmin; when that is shorter than the chosen dates, the status line and READMEs give the dates. Values no station reports are taken as missing first, in every model file and table: rain, radiation, humidity, vapour pressure or wind below 0, radiation above 50 MJ/m², a temperature outside −60…60 °C, and Tmax = Tmin = 0 (an empty row). Then Tmax, Tmin and wind are linear between neighbouring days and reach up to 3 days past the first or last value; a longer run of wind at either end takes that calendar month's mean over the days written (the overall mean if the month has no wind), counted separately in the README. A column is left out only when the weather has none of it. Solar radiation is 0.16 √(Tmax − Tmin) Ra (FAO-56 Eq. 50), rain 0, vapour pressure from the dew point or Tmin, and ET₀ FAO-56 from the other columns; a Tmax below Tmin is swapped. Each README counts the filled days. SWAT+ (−99), EPIC (999) and APEX (blank or 9999) get their missing-value codes and generate those days.
+
+**TAV and AMP.** Monthly means of (Tmax + Tmin)/2 need 20 or more days each. DSSAT pools all years (TAV = mean of the 12 means, AMP = warmest minus coldest month, as CSM, WEATHER.CDE and the official headers use it). APSIM averages the same two numbers over complete calendar years (its `tav_amp`). When the chosen dates do not cover every month, the app reads the last 10 complete years from the same source (gridMET for your own file). If that read fails, TAV and AMP come from the months the dates have and are marked approximate in the file and its README.
+
+**Weather-generator statistics.** EPIC/APEX `.WP1` follow WXPM3020 (wet day > 0 mm; they match its output for the official TX1136 example within 0.001). SWAT+ `weather-wgn.cli`: wet day ≥ 0.1 mm; the maximum half-hour rain is a third of each month's largest daily rain, averaged over the years in which the month is complete (no sub-daily data). Each group of statistics (temperature, rain, solar radiation, humidity, wind) comes from the chosen dates when every calendar month has 20 or more days of it, pooled over the years; else from the 10 complete years (read whenever the dates lack a month or a variable) when they have 20 or more; else from the chosen dates with 10 or more days in every month; else from the 10 years with 10 or more, the last two with a note naming the variable and months. Otherwise the model's files are not written (`NOT_WRITTEN.txt` says why), rather than written with zeros. Monthly rain totals and wet days are per whole month, from the days with data.
+
+**Wind height.** DSSAT and APSIM: 2 m (DSSAT WIND in km/day); SWAT+: 1.7 m, u₁₀ × 0.17^0.2; EPIC/APEX: 10 m. EPIC/APEX `.WND` take the monthly speed and 16-direction frequencies from the app's hourly wind; months it does not cover use the daily 10 m wind, with directions spread evenly.
+
+**File names.** APSIM and AquaCrop files are named from the coordinates to 0.001° (about 100 m), e.g. `WG33578N101855W`, so nearby sites do not overwrite each other; EPIC and APEX want 8.3 names, so theirs are W + 7 letters and digits packed from the same coordinates. The DSSAT station code is a letter, a digit and two letters or digits made the same way.
+
+**CO₂ (APSIM).** NOAA GML Mauna Loa annual means 1979–2025, then +2.5 ppm a year (AquaCrop's assumption). Without a co2 column APSIM Next Gen assumes 350 ppm. DSSAT and AquaCrop read their own Mauna Loa files.
+
+**Your soil file** (CSV or text) is read by name in the same way, with lab spellings (Upper/Lower depth, From/To, Sand total, SandPct, pH water, pHw, pH 1:1, pH (H2O), EC 1:1, ECe, Sat. paste EC, CaCO3 equivalent, CCE, CEC7, WP, FC, 15 bar, 1/3 bar, −1500 kPa, −33 kPa, and SSURGO's `sandtotal_r`, `wthirdbar_r` and the like). Not read: pH in CaCl₂, KCl or buffer, fine-sand fractions, base saturation, ECEC, fragments by weight, and `LL` unless a `DUL` column stands next to it (elsewhere it is the liquid limit). The unit in a header is converted (depth in mm, in, ft or m; g/kg; Ksat in cm/h, cm/d, mm/d, m/d, µm/s or in/h; EC in µS/cm or mS/m); water contents above 1 are read as percent, and sand and clay of at most 1 as fractions. Organic carbon gives organic matter × 1.724 when there is no organic matter column. Sand and clay that do not fit (below 0, or above 100 % together) are refused with the layer named. The sheet names the columns it did not use.
+
+**Soil.** The survey component's horizons (or your table) in the common structure of `js/models.js`. Horizons count from the first with water retention and bulk density to the first without (bedrock or a cemented pan ends the profile).
+- *Layers:* "each model's usual" splits the horizons at DSSAT's standard depths (5, 15, 30, 45, 60, 90, 120, 150, 180, 210 cm, at most 20 layers) and APSoil's 150, 150, 300 … mm layers; AquaCrop takes at most 5 horizons, APEX 10, EPIC 15, merging the thinnest neighbours. "The horizons as they are" writes them unchanged. "Custom depths" re-layers the profile: each layer value = Σ wᵢxᵢ / Σ wᵢ over the horizons it overlaps by wᵢ cm, and Ksat = Σ wᵢ / Σ (wᵢ/Kᵢ). Depths past a profile that simply stops repeat the deepest horizon; depths past bedrock are cut there. The root growth factor is recomputed for each layer.
+- *DSSAT `WG.SOL`:* soil ID WG + the 8-digit component key for an unedited survey soil on DSSAT's usual layers; any other layering, an edited surface or your own soil gets WG + 8 letters and digits made from the written soil table, so a profile with other layers or values never takes an earlier profile's ID (DSSAT uses the first profile in WG.SOL with a matching ID); columns as in §4, values right-aligned in 6-character slots of at most 5 characters (SSKS with fewer decimals when large); a second tier with CaCO₃ (g/kg) on the same rows.
+- *APSIM `.apsimx`:* version 168 JSON; LL15, DUL, SAT from the survey with SAT ≤ 1 − BD/2.65 − 0.001; AirDry = 0.5 × LL15 in the top layer; KS = Ksat × 24 mm/day; Carbon = OM/1.724; crop KL 0.06 to 0.01 with depth, XF 1 (0 below a restrictive layer); SWCON 0.3; initial water at DUL; NO₃ 1 ppm, NH₄ 0.1 ppm; summer from 1 April in the northern hemisphere.
+- *AquaCrop `.SOL`:* SAT, FC, WP in vol %; Ksat mm/day; CN by hydrologic group A 46, B 61, C 72, D 77 (Table 2.14d, 5% initial abstraction); REW = round(10 (FC − WP/2) × 0.04), 0–15; CRa and CRb from the soil class (Tables 2.24s-3, 2.24s-5); gravel 0 because the survey's water contents are for the whole soil; penetrability 100%, or 0 below a restrictive layer.
+- *EPIC/APEX `.SOL`:* moist albedo = 0.625 × dry; field capacity and wilting point on a fine-earth basis, θ / (1 − fragment volume); blank pH as 7.
+- *SWAT+ `soils.sol` and QSWAT+ table:* horizons without a survey bulk density are left out and named in a note, as in the official SWAT+ soil database (not custom layers, which are your depths and always have a weighted bulk density); depths in mm, carbon = OM/1.72, rock = % by weight > 2 mm, albedo = dry albedo, USLE K = the survey's rock-free K, or for your own layers K = f_csand f_cl-si f_orgc f_hisand (Williams 1995, SWAT theory 4:1.1); texture up to the 16 characters SWAT+ reads.
+
+**Figures and tables.** Charts are redrawn off screen at the chosen size: pixels = inches × DPI, fonts in points (1 pt = DPI/72 px). PNG gets a pHYs chunk, JPEG its JFIF density, and TIFF is written in the app (baseline RGB, PackBits, resolution tags in inches). CSV files carry a UTF-8 byte-order mark and the units in the headers. The annual wind summary marks partial years ("Complete year", and "Hours with data in the period" as a % of the year); the monthly summary writes "not ranked (part of a year)" for the months of a period that does not cover all 12 and "no data" for months without data, and heads its shares "% of the year" or "% of the months with data". The plain CSV has a README too, giving the ET₀ source and the layers. Each model folder's README gives the layers its soil file has (count, depths, bottoms).
+
+**Units.** `js/units.js` holds one table of quantities, each with a base unit, choices, factors and decimals, plus metric, US and default presets. Display values convert from the base; classes stay defined in their source units (E and I in t/ac/yr, NRCS specifications in US units) and their edges are converted for display; model files ignore it and use each model's units.
 
 ## Known gaps
 

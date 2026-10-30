@@ -477,9 +477,19 @@ SOURCES = [
      "built into the app (data/layers.js and PNG overlays)", "statewide grid", "display only"),
     ("Base maps; county lines", "Esri, USGS, OpenStreetMap; U.S. Census TIGER (county lines)", "map tiles; TIGERweb map "
      "service drawn per tile", "—", "switch base map"),
+    ("Daily weather for model files (data sheet)", "University of Idaho gridMET; NASA POWER; or your own daily file",
+     "THREDDS OPeNDAP, 9 variables (direct); POWER daily API (direct); your CSV, text or Excel file read in the browser",
+     "4 km, 1979 on; 0.5°, 1981 on; your station", "NASA POWER; gaps in your file can be filled from gridMET"),
+    ("Atmospheric CO₂ (APSIM files)", "NOAA GML Mauna Loa annual means", "built into the app", "1979–2025, +2.5 ppm a year after",
+     "—"),
+    ("Your soil profile (data sheet)", "your lab results or edits", "typed into the sheet or read from a CSV in the browser",
+     "your layers", "blanks estimated with Saxton & Rawls (2006)"),
 ]
 
 WIND_CALC = [
+    ("Period", "the last 5, 10 or 20 complete years, or your dates (30 days or more inside the model's record, 20 or more "
+     "in one month); a month needs 480 hours; months weighted so an uneven period does not tilt the year",
+     "choice → dates, months", "wind.js · `resolvePeriod`"),
     ("Pick the station", "6 nearest within 150 km whose record covers the period; AWOS ranked as if 100 km farther",
      "station list → candidates", "wind.js · `nearestStations`"),
     ("Clean the airport record", "routine FM-15 reports only; drop quality flags 2, 3, 6, 7; wind ≤ 40 m/s, gust ≤ 55 m/s; "
@@ -492,8 +502,8 @@ WIND_CALC = [
      "wind.js · `analyze`"),
     ("Erosive energy", "Σ u² (u − uₜ) over erosive hours", "hourly wind → energy/month", "`analyze`"),
     ("Dryness", "D = (ET₀ − P) / ET₀, limited to 0–1", "monthly rain, ET₀ → D", "`analyze`"),
-    ("Monthly risk and red months", "index = energy × D; share = month ÷ year; red ≥ 10 %, amber ≥ 6.7 %",
-     "energy, D → 12-month strip", "`analyze`"),
+    ("Monthly risk and red months", "index = energy × D; share = month ÷ year; red ≥ 10 %, amber ≥ 6.7 %; ranked only "
+     "when the period covers all 12 months", "energy, D → 12-month strip", "`analyze`"),
     ("Wind rose and directions", "16 sectors; prevailing = sector with most erosive energy (neighbours weighted ½); "
      "resultant = vector sum of energy toward downwind", "speed, direction → rose, directions", "`analyze`"),
     ("Drift potential", "Fryberger: Σ V² (V − 12 kn) for V > 12 kn; RDP = vector sum; RDP/DP", "hourly wind → DP, RDP",
@@ -522,8 +532,8 @@ SOIL_CALC = [
      "SSURGO or wind engine → C", "app.js · `cFactor`"),
     ("Bare-soil erosion potential", "E = I × C / 100", "I, C → E (t/ac/yr)", "app.js · `riskModel`"),
     ("Erodibility index", "EI = E / T", "E, T → EI", "`riskModel`"),
-    ("Risk class", "Low < 10, Moderate 10–40, High 40–80, Very high 80–150, Extreme ≥ 150 t/ac/yr", "E → class",
-     "`riskModel`"),
+    ("Risk class", "Low < 10, Moderate 10–40, High 40–80, Very high 80–150, Extreme ≥ 150 t/ac/yr; the exact E is "
+     "classed in every display unit", "E → class", "`riskModel`; units.js · `cls`"),
     ("Water retention", "Saxton & Rawls (2006) pedotransfer equations", "sand, clay, OM → LL, DUL, SAT, AWC, Ksat",
      "soil.js · `saxtonRawls`"),
     ("RWEQ erodible fraction", "EF = (29.09 + 0.31 Sa + 0.17 Si + 0.33 Sa/Cl − 2.59 OM − 0.95 CaCO₃) / 100",
@@ -532,7 +542,26 @@ SOIL_CALC = [
     ("Slope and aspect", "finite differences on the centre and four neighbours ~100 m away", "5 elevations → slope %, aspect",
      "app.js · `fetchElevation`"),
     ("Profile parameters", "SLU1, SLDR, runoff curve number, root growth factor, albedo per crop-model .SOL format",
-     "all horizons → .SOL file", "soil.js · `toSOL`"),
+     "all horizons → DSSAT .SOL file", "writers.js · `dssatSol`"),
+]
+
+MODEL_CALC = [
+    ("Read the weather", "gridMET 9 variables, NASA POWER daily, or your file (columns found by name, units converted, wind "
+     "moved to 10 and 2 m by the log law); dates cut to the source's record", "dates → daily series",
+     "wind.js · `dailyWeather`; models.js · `parseWeatherCSV`"),
+    ("Fill your file's gaps (optional)", "missing days taken from gridMET for the same days, not its ET₀; then ET₀ by "
+     "FAO-56 from your columns", "your series + gridMET → filled series", "models.js · `fillGaps`; datasheet.js"),
+    ("Clean", "values no station reports (rain or wind < 0, solar > 50 MJ/m², T outside −60…60 °C, Tmax = Tmin = 0) "
+     "become missing", "series → cleaned series", "writers.js · `clean`"),
+    ("Gap-free copy (DSSAT, APSIM, AquaCrop)", "first to last day with Tmax and Tmin; linear Tmax, Tmin, wind; Hargreaves "
+     "solar; rain 0; ET₀ FAO-56", "cleaned series → complete series", "writers.js · `complete`"),
+    ("Climate statistics", "TAV, AMP from 12 monthly means; generator statistics per month; 10 complete years read when "
+     "the dates lack a month or a variable", "series → .WTH header, .met, .WP1, weather-wgn.cli",
+     "writers.js · `tavAmp`, `wp1Stats`, `swatWgn`"),
+    ("Soil layers", "each model's usual layers, the horizons as they are, or your depths (thickness-weighted means, "
+     "harmonic Ksat); stops at bedrock", "profile → model layers", "models.js · `relayer`; writers.js"),
+    ("Write and pack", "each model's fixed-width or JSON layout, a README per folder, NOT_WRITTEN.txt where a model "
+     "cannot be made; one zip", "series, soil → zip", "writers.js; datasheet.js · `build`"),
 ]
 
 AREA_CALC = [
@@ -565,15 +594,26 @@ RESULTS = [
     ("Area panel: WEG and risk-class shares, mean I and E", "sampled shares, components weighted by %",
      "SSURGO polygons and components; USA Structures, TIGER and NHD left out"),
     ("Statewide map colours", "pre-computed offline", "SSURGO WEG/I (UC Davis SoilWeb rasters), NRCS C, NASA POWER monthly wind"),
+    ("Model files (data sheet zip)", "each model's layout, gaps filled where the model needs it",
+     "gridMET, NASA POWER or your file; the survey soil or yours"),
+    ("Figure and table downloads", "charts redrawn at the chosen size and DPI; CSV with units", "the results above, in the "
+     "units chosen"),
 ]
 
 CODE = [
     ("index.html, css/app.css", "page layout, tabs, sheets and the phone layout"),
     ("js/util.js", "downloads with time limits (`fetchJSON`, `fetchText`), concurrency pool, statistics helpers"),
-    ("js/soil.js", "SSURGO queries, texture, WEG and I, Saxton & Rawls, RWEQ, CSV and .SOL export"),
-    ("js/wind.js", "wind and moisture downloads with fallbacks, station choice and QC, calibration, monthly analysis"),
+    ("js/units.js", "the units table: quantities, conversions, metric and US presets, risk classes in every unit"),
+    ("js/export.js", "PNG, JPEG and TIFF files with their DPI, CSV, saving files"),
+    ("js/soil.js", "SSURGO queries, texture, WEG and I, Saxton & Rawls, RWEQ, CSV export"),
+    ("js/wind.js", "wind and moisture downloads with fallbacks, periods, station choice and QC, calibration, monthly "
+     "analysis, daily weather for model files"),
     ("js/app.js", "map, Texas check, loading sequence, risk model, elevation and land cover, rendering of every tab"),
-    ("js/charts.js", "Chart.js charts"),
+    ("js/charts.js", "Chart.js charts, drawn on screen or off screen for downloads"),
+    ("js/downloads.js", "the units sheet, figure sheet (size, DPI, format) and CSV tables"),
+    ("js/models.js", "weather and soil structures for model files, your weather and soil files, soil re-layering, zip"),
+    ("js/writers.js", "DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop and plain CSV writers"),
+    ("js/datasheet.js", "the data sheet: weather source, dates, soil, layers, models; builds the zip"),
     ("js/practices.js", "practice planner: questions, rules, specifications, species tables"),
     ("js/area.js", "field or area analysis: drawing, boundary files, clipped soils, left-out features, sampling, panel, CSV; "
      "map-click check"),
@@ -604,6 +644,9 @@ STEPS = [
      "planner builds the plan from the risk, soil group, region and windy months."),
     ("Changes.", " Editing the soil layer, the threshold or the units recalculates in the browser with no new downloads. "
      "Changing the period, the model or the calibration station downloads again."),
+    ("Downloads.", " Every chart can be saved as PNG, TIFF or JPEG at a chosen size and DPI, or as CSV. The data sheet "
+     "reads daily weather for the chosen dates (gridMET, NASA POWER or your file), takes the survey soil or yours, and "
+     "writes files for DSSAT, SWAT+, EPIC, APEX, APSIM and AquaCrop into one zip (section 8)."),
 ]
 
 LIMITS = [
@@ -789,7 +832,7 @@ def build_docx(figs, commit):
     para("Where each dataset comes from, where it is calculated, and how the results reach the screen",
          size=13, color=muted, after=2)
     para(f"App: barsa1ly.github.io/windguard-tx   ·   Code: github.com/barsa1ly/windguard-tx (commit {commit})   ·   "
-         f"October 28, 2026", size=9, color=muted, after=10)
+         f"October 30, 2026", size=9, color=muted, after=10)
 
     doc.add_heading("1. In one paragraph", level=1)
     para("WindGuard TX is a static web page. When you pick a point inside Texas, your browser asks each agency's web "
@@ -852,6 +895,8 @@ def build_docx(figs, commit):
     table(["Step", "Rule or equation", "Inputs → output", "Where"], SOIL_CALC, [1.35, 3.0, 1.55, 1.1])
     doc.add_heading("Field or area analysis (Figure 4)", level=2)
     table(["Step", "Rule or equation", "Inputs → output", "Where"], AREA_CALC, [1.35, 3.0, 1.55, 1.1])
+    doc.add_heading("Model files (data sheet)", level=2)
+    table(["Step", "Rule or equation", "Inputs → output", "Where"], MODEL_CALC, [1.35, 3.0, 1.55, 1.1])
 
     doc.add_heading("9. Data sources", level=1)
     table(["Data", "Producer", "How the app reads it", "Resolution", "If it fails"], SOURCES, [1.6, 1.45, 1.45, 1.2, 1.3],

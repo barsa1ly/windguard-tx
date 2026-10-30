@@ -26,9 +26,19 @@ WG.area = (function () {
   const WATER_FTYPE = new Set([390, 436, 466, 493, "Lake/Pond", "Reservoir", "Swamp/Marsh", "Estuary"]);
   const WEG_ORDER = ["1", "2", "3", "4", "4L", "5", "6", "7", "8"];
   const WEG_COLOR = Object.fromEntries(WEG_ORDER.map((k, i) => [k, LAYERS.layers.weg.legend[i].color]));
-  const RISK = [["Low", "< 10"], ["Moderate", "10–40"], ["High", "40–80"], ["Very high", "80–150"], ["Extreme", "≥ 150"]]
-    .map(([name, range], i) => ({ name, range, color: LAYERS.layers.susceptibility.legend[i].color }));
-  const riskClass = E => (E < 10 ? 0 : E < 40 ? 1 : E < 80 ? 2 : E < 150 ? 3 : 4);
+  const UN = WG.units;
+  // classes defined in t/ac/yr (units.js, shared with the risk card); labels follow the soil-loss unit of the units table
+  const EDGES = UN.Q.soilLoss.edges;
+  const RISK = ["Low", "Moderate", "High", "Very high", "Extreme"].map((name, i) => ({ name, color: LAYERS.layers.susceptibility.legend[i].color,
+    get range() { const e = EDGES.map(v => UN.edge("soilLoss", v)); return [`< ${e[0]}`, `${e[0]}–${e[1]}`, `${e[1]}–${e[2]}`, `${e[2]}–${e[3]}`, `≥ ${e[3]}`][i]; } }));
+  const riskClass = E => UN.cls("soilLoss", E); // the exact E, in every unit
+  const AC = 4046.8564; // m² per acre: areas are kept in acres here and shown in the units table's area unit
+  // km² and mi² by size; ha and ac to d decimals, with two significant figures at least so a small field is not "0 ha"
+  const areaTxt = (acres, d) => {
+    const x = UN.conv("area", acres * AC), big = ["km²", "mi²"].includes(UN.sym("area"));
+    return UN.fmt("area", acres * AC, !(x > 0) ? d : big ? (x >= 100 ? 0 : x >= 10 ? 1 : x >= 0.1 ? 2 : 3) : Math.max(d, x >= 10 ? 0 : x >= 1 ? 1 : x >= 0.1 ? 2 : 3));
+  };
+  const iTxt = I => String(I).replace(/\d+/g, v => UN.num("soilLoss", +v, 0)); // WEG index I (t/ac/yr, may be a range) in the chosen unit
 
   /* ---------------- geometry ---------------- */
   const R = 6378137, rad = Math.PI / 180;
@@ -274,7 +284,7 @@ WG.area = (function () {
     const my = ++seq;
     const acres = polysArea(polys) / 4046.86;
     if (!(acres > 0)) return fail("The boundary has no area.");
-    if (acres / 247.105 > MAX_KM2) return fail(`This area is ${fmt(acres / 247.105, 0)} km² (${fmt(acres, 0)} ac). The limit is ${MAX_KM2} km² (${fmt(MAX_KM2 * 247.105, 0)} ac); split it into smaller parts.`);
+    if (acres / 247.105 > MAX_KM2) return fail(`This area is ${fmt(acres / 247.105, 0)} km² (${areaTxt(acres, 0)}). The limit is ${MAX_KM2} km² (${areaTxt(MAX_KM2 * 247.105, 0)}); split it into smaller parts.`);
     const ringsAll = polys.flat(), bb = bboxOf(ringsAll);
     current = { polys, name, acres, bb };
     drawLayers();
@@ -283,7 +293,7 @@ WG.area = (function () {
       paddingTopLeft: [phone ? 24 : (sheet.hidden ? 0 : sheet.offsetWidth) + 30, 80],
       paddingBottomRight: [24, phone && !sheet.hidden ? Math.round(innerHeight * 0.55) + 20 : 30] }); // the phone panel grows to 55 %
     const excl = $("#areaExclude").checked;
-    status(`Reading the soil survey${excl ? ", building footprints, roads and water" : ""} for ${fmt(acres, 0)} ac…`);
+    status(`Reading the soil survey${excl ? ", building footprints, roads and water" : ""} for ${areaTxt(acres, 0)}…`);
     try {
       const pad = 0.0003, env = [bb[0] - pad, bb[1] - pad, bb[2] + pad, bb[3] + pad];
       const [soil, ex] = await Promise.all([soils(polys), excl ? exclusions(env, false) : null]);
@@ -316,7 +326,7 @@ WG.area = (function () {
           const w = c.pct / tot, I = c.wei ?? WG.soil.WEG_I[c.weg] ?? 0;
           weg[c.weg] = (weg[c.weg] || 0) + w;
           sumI += w * I; wI += w;
-          if (C) { const E = (I * C) / 100; risk[riskClass(Math.round(E))] += w; sumE += w * E; wE += w; } else noC += w; // classes of whole t/ac/yr, as shown
+          if (C) { const E = (I * C) / 100; risk[riskClass(E)] += w; sumE += w * E; wE += w; } else noC += w;
         });
       }
       const N = pts.length;
@@ -343,7 +353,7 @@ WG.area = (function () {
         const u = r.soil.units[p.mukey] || {};
         const color = u.water ? "#2563eb" : WEG_COLOR[u.weg] || "#9aa5b1";
         L.polygon(p.rings.map(rg => rg.map(([x, y]) => [y, x])), { pane: "thematic", color: "#ffffff", weight: 0.8, fillColor: color,
-          fillOpacity: 0.6, interactive: true }).bindTooltip(`${esc(u.musym || "")} · ${esc(u.muname || "")}${u.weg ? ` · WEG ${esc(u.weg)}${WG.soil.wegInfo(u.weg) ? `, I ${WG.soil.wegInfo(u.weg).I}` : ""}` : ""}`, { sticky: true })
+          fillOpacity: 0.6, interactive: true }).bindTooltip(`${esc(u.musym || "")} · ${esc(u.muname || "")}${u.weg ? ` · WEG ${esc(u.weg)}${WG.soil.wegInfo(u.weg) ? `, I ${iTxt(WG.soil.wegInfo(u.weg).I)} ${esc(UN.sym("soilLoss"))}` : ""}` : ""}`, { sticky: true })
           .addTo(layer);
       });
     }
@@ -362,20 +372,20 @@ WG.area = (function () {
   function bars(rows) {
     return `<div class="abars">${rows.map(r => `<div class="abar"><span class="sw" style="background:${r.color}"></span>
       <span class="al">${r.label}</span><span class="track"><i style="width:${Math.min(100, r.share * 100).toFixed(1)}%;background:${r.color}"></i></span>
-      <span class="av">${pct(r.share)}</span><span class="aa">${fmt(r.acres, r.acres < 10 ? 1 : 0)} ac</span></div>`).join("")}</div>`;
+      <span class="av">${pct(r.share)}</span><span class="aa">${areaTxt(r.acres, r.acres * AC < 1e5 ? 1 : 0)}</span></div>`).join("")}</div>`;
   }
   function render() {
     const c = current, r = c.result, n = r.N || 1;
     const share = k => r.count[k] / n, validAc = c.acres * share("valid");
-    const left = ["building", "road", "water"].filter(k => r.count[k]).map(k => `${{ building: "buildings", road: "roads", water: "water" }[k]} ${fmt(c.acres * share(k), 1)} ac`);
+    const left = ["building", "road", "water"].filter(k => r.count[k]).map(k => `${{ building: "buildings", road: "roads", water: "water" }[k]} ${areaTxt(c.acres * share(k), 1)}`);
     const ratedAc = validAc * (1 - r.notRated / Math.max(r.count.valid, 1)); // open land in components with a WEG
     const wegTot = Object.values(r.weg).reduce((a, b) => a + b, 0) || 1;
-    const wegRows = WEG_ORDER.filter(k => r.weg[k]).map(k => ({ label: `WEG ${k} <small>I ${WG.soil.wegInfo(k).I}</small>`, color: WEG_COLOR[k],
+    const wegRows = WEG_ORDER.filter(k => r.weg[k]).map(k => ({ label: `WEG ${k} <small>I ${iTxt(WG.soil.wegInfo(k).I)}</small>`, color: WEG_COLOR[k],
       share: r.weg[k] / wegTot, acres: ratedAc * (r.weg[k] / wegTot) }));
     const riskTot = r.risk.reduce((a, b) => a + b, 0);
     const riskRows = riskTot ? RISK.map((k, i) => ({ label: `${k.name} <small>${k.range}</small>`, color: k.color, share: r.risk[i] / riskTot,
       acres: ratedAc * (r.risk[i] / riskTot) })).filter(x => x.share > 0) : [];
-    const meanE = r.meanE, meanK = meanE !== null ? riskClass(Math.round(meanE)) : 0; // class of the number shown
+    const meanE = r.meanE, meanK = meanE !== null ? riskClass(meanE) : 0; // shown with UN.fmtCls, so the number agrees with the class
     const cTxt = r.cRange ? (r.cRange[0] === r.cRange[1] ? `C = ${fmt(r.cRange[0], 0)}` : `C = ${fmt(r.cRange[0], 0)}–${fmt(r.cRange[1], 0)}`) : "no climatic factor in SSURGO";
     const st = r.status;
     const srcBits = [
@@ -385,12 +395,12 @@ WG.area = (function () {
       st && (st.water ? `water: ${st.waterSrc} and SSURGO Water map units` : "water: SSURGO Water map units only (NHD did not answer)"),
     ].filter(Boolean);
     $("#areaResults").innerHTML = `
-      <div class="area-sum"><b>${esc(c.name)}</b><span>${fmt(c.acres, 0)} ac · ${fmt(c.acres / 2.47105, 0)} ha</span></div>
-      <p class="fine">Analysed: <b>${fmt(validAc, 0)} ac</b> of open land${left.length ? `; left out ${left.join(", ")}` : ""}${r.count.outside ? `; ${fmt(c.acres * share("outside"), 0)} ac outside Texas` : ""}${r.count.nodata ? `; ${fmt(c.acres * share("nodata"), 1)} ac without soil data` : ""}.</p>
-      ${meanE !== null ? `<div class="area-kpi"><div><small>Mean bare-soil potential</small><b>${fmt(meanE, 0)} t/ac/yr</b><span>${RISK[meanK].name} (${RISK[meanK].range})</span></div>
-        <div><small>Mean erodibility I (0–310)</small><b>${fmt(r.meanI, 0)} t/ac/yr</b><span>${cTxt}</span></div></div>` : ""}
+      <div class="area-sum"><b>${esc(c.name)}</b><span>${areaTxt(c.acres, 0)}</span></div>
+      <p class="fine">Analysed: <b>${areaTxt(validAc, 0)}</b> of open land${left.length ? `; left out ${left.join(", ")}` : ""}${r.count.outside ? `; ${areaTxt(c.acres * share("outside"), 0)} outside Texas` : ""}${r.count.nodata ? `; ${areaTxt(c.acres * share("nodata"), 1)} without soil data` : ""}.</p>
+      ${meanE !== null ? `<div class="area-kpi"><div><small>Mean bare-soil potential</small><b>${UN.fmtCls("soilLoss", meanE, 0)}</b><span>${RISK[meanK].name} (${RISK[meanK].range})</span></div>
+        <div><small>Mean erodibility I (${UN.range("soilLoss", 0, 310, 0)})</small><b>${UN.fmt("soilLoss", r.meanI, 0)}</b><span>${cTxt}</span></div></div>` : ""}
       <h4>Wind Erodibility Group (share of rated soil)</h4>
-      <p class="fine">WEG 1 is the most erodible and 8 is not erodible; I is each group's erodibility index in t/ac/yr (0–310). <button class="link" data-methods="m-scales">All nine groups →</button></p>
+      <p class="fine">WEG 1 is the most erodible and 8 is not erodible; I is each group's erodibility index in ${UN.sym("soilLoss")} (${UN.range("soilLoss", 0, 310, 0)}). <button class="link" data-methods="m-scales">All nine groups →</button></p>
       ${wegRows.length ? bars(wegRows) : '<p class="fine">No rated soils in this area.</p>'}
       ${r.notRated > 0.005 * r.count.valid ? `<p class="fine">${pct(r.notRated / r.count.valid)} of the open land is in components without a WEG (rock outcrop, urban land, pits); it is not in the shares.</p>` : ""}
       <h4>Bare-soil erosion potential, E = I × C / 100</h4>${riskRows.length ? bars(riskRows) : '<p class="fine">No climatic factor C for these map units.</p>'}
@@ -410,11 +420,12 @@ WG.area = (function () {
   function csv() {
     const c = current, r = c.result, n = r.N || 1, validAc = c.acres * r.count.valid / n;
     const wegTot = Object.values(r.weg).reduce((a, b) => a + b, 0) || 1, riskTot = r.risk.reduce((a, b) => a + b, 0) || 1;
-    const lines = [`# WindGuard TX area analysis: ${c.name}`, `# total_acres,${c.acres.toFixed(1)}`, `# analysed_acres,${validAc.toFixed(1)}`,
+    const lines = [`# WindGuard TX area analysis: ${c.name}`, `# total_acres,${c.acres.toFixed(1)}`, `# total_hectares,${(c.acres / 2.47105).toFixed(1)}`,
+      `# analysed_acres,${validAc.toFixed(1)}`, `# analysed_hectares,${(validAc / 2.47105).toFixed(1)}`,
       ...["building", "road", "water", "outside", "nodata"].map(k => `# ${k}_acres,${(c.acres * r.count[k] / n).toFixed(2)}`),
       `# sample_points,${r.N}`, "", "category,class,share_pct",
       ...WEG_ORDER.filter(k => r.weg[k]).map(k => `WEG,${k},${(100 * r.weg[k] / wegTot).toFixed(2)}`),
-      ...RISK.map((k, i) => `E class,${k.name} (${k.range} t/ac/yr),${(100 * r.risk[i] / riskTot).toFixed(2)}`),
+      ...RISK.map((k, i) => `E class,${k.name} (${["< 10", "10–40", "40–80", "80–150", "≥ 150"][i]} t/ac/yr),${(100 * r.risk[i] / riskTot).toFixed(2)}`),
       "", "mukey,musym,muname,weg_dominant,climatic_factor_C,share_of_analysed_pct",
       ...r.mu.map(u => [u.mukey, u.musym, `"${(u.muname || "").replace(/"/g, '""')}"`, u.weg || "", u.C || "", (100 * u.n / Math.max(r.count.valid, 1)).toFixed(2)].join(","))];
     download(`windguard-area-${c.name.replace(/[^\w-]+/g, "_").slice(0, 40)}.csv`, lines.join("\n"), "text/csv");
@@ -557,5 +568,8 @@ WG.area = (function () {
     else if (e.key === "Enter") finishDraw();
   });
 
-  return { excludedAt, drawing: () => drawing, open, analyse };
+  // the units table changed: draw the results and the map's tooltips again in the new units
+  const rerender = () => { if (current && current.result) { render(); drawLayers(); } };
+  UN.on(rerender);
+  return { excludedAt, drawing: () => drawing, open, analyse, rerender };
 })();

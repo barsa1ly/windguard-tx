@@ -4,6 +4,51 @@
    evidence; each practice card cites its own sources (R below). */
 WG.practices = (function () {
   const { esc, fmt, MONTHS } = WG.util;
+  const UN = WG.units;
+
+  /* ------------------------------------------------------------------ units
+     Values from published standards are written as in their sources (US customary): L("40–50 in"). Text is built
+     at render time in the units table's choice; a converted value keeps the original in brackets,
+     "102–127 cm (40–50 in)". Lookup tables used in calculations stay in their source units. */
+  const NB = String.fromCharCode(160); // no-break space between number and unit, as WG.units writes it
+  const UNIT_Q = { ft: "length", in: "shortLength", mi: "distance", ac: "area", "lb/ac": "massArea", "t/ac": "massAreaHeavy", "PLS/ft²": "seedDensity" };
+  const GLYPH = { "¼": 0.25, "⅓": 1 / 3, "½": 0.5, "¾": 0.75 };
+  const toNum = s => GLYPH[s] ?? +s.replace(/,/g, "");
+  const cvd = (q, u) => UN.get(q) !== u; // is a value written in u shown converted?
+  // about two significant figures (0.46, 4.6, 46, 457), three from 1,000 up (1,460)
+  const dec = m => (m >= 10 || m === 0 ? 0 : m >= 1 ? 1 : Math.min(6, 1 - Math.floor(Math.log10(m))));
+  const rnd = (v, m) => { if (m < 1000) return v; const p = 10 ** (Math.floor(Math.log10(m)) - 2); return Math.round(v / p) * p; };
+  /* a (to b), written in unit u, as numbers in the chosen unit of q: "102–127"; d fixes the decimals */
+  function nums(q, a, b, u, d) {
+    const x = UN.conv(q, UN.fromUnit(q, a, u)), y = b === undefined ? null : UN.conv(q, UN.fromUnit(q, b, u));
+    const m = Math.max(x, y ?? 0), dd = d ?? dec(m), f = v => fmt(d === undefined ? rnd(v, m) : v, dd);
+    if (y !== null) return `${f(x)}–${f(y)}`;
+    return d === undefined && dd > 0 ? f(x).replace(/\.?0+$/, "") : f(x);
+  }
+  /* A published value as its source writes it: "1.5 ft", "40–50 in", "¼–½ in", "10-in" (before a noun),
+     "0.3 lb a.i./ac". q names the quantity where the unit alone does not (rain in inches: "precip").
+     o.sq: square brackets, for a value already inside parentheses; o.n: numbers only, the unit being given by a
+     column head or the sentence; o.mass: only the mass part of the unit ("2.0 lb"); o.d: fixed decimals. */
+  const RE_VAL = /^([\d.,¼⅓½¾]+)(?:–([\d.,¼⅓½¾]+))?([ -])(.+)$/;
+  function L(text, q, o = {}) {
+    const p = text.match(RE_VAL);
+    if (!p) return text;
+    const [, a, b, sep, unit] = p, w = unit.match(/^(\S+) (\S+)\/(\S+)$/); // "lb PLS/ac" is lb/ac
+    const u = w ? `${w[1]}/${w[3]}` : unit, qq = q || UNIT_Q[u];
+    if (!qq) return text;
+    const show = s => (o.mass ? s.split("/")[0] : w ? s.replace("/", ` ${w[2]}/`) : s);
+    const orig = b === undefined ? a : `${a}–${b}`;
+    if (!cvd(qq, u)) return o.n ? orig : `${orig}${sep === "-" ? "-" : NB}${show(u)}`;
+    const v = nums(qq, toNum(a), b === undefined ? undefined : toNum(b), u, o.d), [l, r] = o.sq ? ["[", "]"] : ["(", ")"];
+    return o.n ? `${v} ${l}${orig}${r}` : `${v}${NB}${show(UN.sym(qq))} ${l}${orig}${NB}${show(u)}${r}`;
+  }
+  // a unit symbol with a word inside: usym("massArea", "PLS") is "kg PLS/ha" or "lb PLS/ac"
+  const usym = (q, word) => (word ? UN.sym(q).replace("/", ` ${word}/`) : UN.sym(q));
+  // a table cell holding a published number (the column head gives the unit), the original in brackets when converted
+  const cell = (q, v, u, d, orig = fmt(v, d)) => (cvd(q, u) ? `${UN.num(q, UN.fromUnit(q, v, u), d)} (${orig})` : orig);
+  // a seeding rate: text, numbers and [from, to] ranges in lb/ac
+  const rate = parts => parts.map(x => (typeof x === "string" ? x : L(`${[].concat(x).join("–")} lb/ac`, null, { n: 1 }))).join("");
+  const AREA_WORD = { ac: "acre", ha: "hectare", "km²": "square kilometer", "mi²": "square mile" };
 
   const LU = [
     { id: "cropland", ic: "🌾", name: "Cropland", sub: "cotton, sorghum, wheat, peanuts" },
@@ -137,17 +182,22 @@ WG.practices = (function () {
     else if (weg === "4L" || /limy|calcareous|draw/i.test(eco)) soilGroup = "limy";
     else if (weg === "4" || /clay/i.test(eco)) soilGroup = "clay";
     const pz = (eco.match(/(\d+)-(\d+)"\s*PZ/i) || []).slice(1).map(Number);
-    const precipIn = pz.length ? (pz[0] + pz[1]) / 2 : w ? w.precip / 25.4 : null;
-    const riskMonths = w && w.riskMonths.length ? w.riskMonths : [1, 2, 3, 4];
-    const midMonths = w ? w.months.map((m, i) => (m.level === "mid" ? i : -1)).filter(i => i >= 0) : [0, 11];
+    const precipIn = pz.length ? (pz[0] + pz[1]) / 2 : w && w.annualized ? w.precip / 25.4 : null; // a part-year sum is not annual rain
+    // the windy season from the data needs a whole year with months that stand out (riskMonths is empty otherwise);
+    // else the usual spring season, said to be so
+    const ranked = !!(w && w.riskMonths.length);
+    const riskMonths = ranked ? w.riskMonths : [1, 2, 3, 4];
+    const midMonths = ranked ? w.months.map((m, i) => (m.level === "mid" ? i : -1)).filter(i => i >= 0) : [0, 11];
+    const seasonNote = ranked ? "" : `typical; ${!state.wind ? "wind history loading" : state.wind.insufficient ? "too little wind data in this period"
+      : state.wind.error ? "wind history unavailable" : !w.annualized ? "the period does not cover all 12 months" : "erosive wind is spread evenly here"}`;
     const dunes = weg === "1" && /sand hills|dune/i.test(eco);
     return {
       lat, lon, region, regionName: REGION_NAME[region], soilGroup, weg, I: surface ? surface.wei : null,
       sandy: weg === "1" || weg === "2", dunes,
       level: risk ? risk.level : null, E: risk ? risk.E : null, EI: risk ? risk.EI : null, C: risk ? risk.C : (s ? s.cFactor : null),
-      riskMonths, midMonths, riskText: WG.monthsText(riskMonths),
-      orient: w ? WG.orientation(w) : "rows across the prevailing spring wind (usually SW–W, so rows NW–SE or N–S)",
-      prevailing: w ? WG.util.compass(w.prevailing) : "SW",
+      riskMonths, midMonths, riskText: WG.monthsText(riskMonths), seasonNote,
+      orient: w && w.prevailing !== null ? WG.orientation(w) : "rows across the prevailing spring wind (usually SW–W, so rows NW–SE or N–S)",
+      prevailing: w && w.prevailing !== null ? WG.util.compass(w.prevailing) : "SW",
       precipIn, eco, ecoId: d && d.eco ? d.eco.ecoclassid : null, mlra: s && s.mlra ? s.mlra.sym : null,
       om: surface ? surface.om : null, dry: precipIn !== null && precipIn < 18,
       dist: txdotDistrict(region, lat, lon),
@@ -173,13 +223,13 @@ WG.practices = (function () {
   const coverTarget = weg => (weg === "1" || weg === "2" ? 60 : weg === "3" || weg === "4" || weg === "4L" ? 40 : 30);
 
   /* ------------------------------------------------------------------ species */
-  // [common, scientific, releases / source, single-species drilled PLS lb/ac (AgriLife) or null]
+  // [common, scientific, releases / source (text, or a function when it holds a measurement), single-species drilled PLS lb/ac (AgriLife) or null]
   const SP = {
     sandbluestem: ["Sand bluestem", "Andropogon hallii", "southern Great Plains seed sources", 6.0],
     littleblue: ["Little bluestem", "Schizachyrium scoparium", "'Pastura', 'OK Select'", 3.4],
     sandlove: ["Sand lovegrass", "Eragrostis trichodes", "'Mason'", 1.5],
-    switch: ["Switchgrass", "Panicum virgatum", "'Alamo' (2.0 lb), 'Blackwell'", 3.5],
-    indian: ["Indiangrass", "Sorghastrum nutans", "'Lometa' — needs ≥ 22 in rain or run-on water", 4.5],
+    switch: ["Switchgrass", "Panicum virgatum", () => `'Alamo' (${L("2.0 lb/ac", null, { mass: 1, sq: 1 })}), 'Blackwell'`, 3.5],
+    indian: ["Indiangrass", "Sorghastrum nutans", () => `'Lometa' — needs ≥ ${L("22 in", "precip")} rain or run-on water`, 4.5],
     sandreed: ["Giant sandreed", "Calamovilfa gigantea", "local collections", null],
     giantdrop: ["Giant dropseed", "Sporobolus giganteus", "local collections", null],
     havard: ["Havard panicum", "Panicum havardii", "local collections", null],
@@ -271,14 +321,15 @@ WG.practices = (function () {
     ["Green sprangletop 'Van Horn'", 0.34], ["Pearl millet (nurse crop)", 1.00], ["Maximilian sunflower", 0.09],
     ["Engelmann daisy 'Eldorado'", 0.60], ["Purple prairie clover 'Kaneb'", 0.12], ["Mexican hat", 0.08]];
 
+  // [crop, scientific, notes, seeding rate: text, numbers and [from, to] ranges in lb/ac (TX 340), shown by rate()]
   const COVER = {
-    rye: ["Cereal rye", "Secale cereale", "most biomass; often beats wheat on dryland; best on sands", "30 dryland · ≤ 60 irrigated"],
-    wheat: ["Winter wheat", "Triticum aestivum", "let it reach ~50% heading for longer-lasting residue (Rolling Plains)", "30 dryland · ≤ 60 irrigated"],
-    triticale: ["Triticale", "× Triticosecale", "tested at Lubbock with no cotton yield penalty", "≈ 30"],
-    strips: ["Bed-shoulder wheat or rye", "—", "South Plains practice: drill on bed shoulders, plant cotton on the bed top", "10–20"],
-    sorghum: ["Forage sorghum / sorghum-sudan", "Sorghum bicolor", "summer barrier rows or dead-litter cover for grass seeding", "per seed label"],
-    millet: ["Pearl millet", "Cenchrus americanus", "summer cover / nurse crop on sands (TxDOT temporary: Brownton millet)", "20 (temporary cover)"],
-    oats: ["Oats + wheat", "Avena sativa, Triticum", "TxDOT cool-season temporary cover, Sep 1–Jan 31", "per TxDOT Table 3"],
+    rye: ["Cereal rye", "Secale cereale", "most biomass; often beats wheat on dryland; best on sands", [30, " dryland · ≤ ", 60, " irrigated"]],
+    wheat: ["Winter wheat", "Triticum aestivum", "let it reach ~50% heading for longer-lasting residue (Rolling Plains)", [30, " dryland · ≤ ", 60, " irrigated"]],
+    triticale: ["Triticale", "× Triticosecale", "tested at Lubbock with no cotton yield penalty", ["≈ ", 30]],
+    strips: ["Bed-shoulder wheat or rye", "—", "South Plains practice: drill on bed shoulders, plant cotton on the bed top", [[10, 20]]],
+    sorghum: ["Forage sorghum / sorghum-sudan", "Sorghum bicolor", "summer barrier rows or dead-litter cover for grass seeding", ["per seed label"]],
+    millet: ["Pearl millet", "Cenchrus americanus", "summer cover / nurse crop on sands (TxDOT temporary: Brownton millet)", [20, " (temporary cover)"]],
+    oats: ["Oats + wheat", "Avena sativa, Triticum", "TxDOT cool-season temporary cover, Sep 1–Jan 31", ["per TxDOT Table 3"]],
   };
 
   /* ------------------------------------------------------------------ plans */
@@ -296,7 +347,7 @@ WG.practices = (function () {
     const seedMonths = tp ? [5, 6, 7] : [1, 2, 3, 4];
     const mixFor = group => ctx.dist && TXDOT[ctx.dist] ? {
       title: `TxDOT 2024 permanent rural mix — ${ctx.dist} district, ${group} soils`,
-      rows: TXDOT[ctx.dist][group], note: "lb PLS/ac drilled; add 25% if broadcast. Published for right-of-way seeding; a good starting mix for rangeland and reclamation in this district.",
+      rows: TXDOT[ctx.dist][group], note: `${usym("massArea", "PLS")} drilled; add 25% if broadcast. Published for right-of-way seeding; a good starting mix for rangeland and reclamation in this district.`,
       ref: "txdot",
     } : null;
     const txGroup = weg === "1" || weg === "2" || weg === "3" ? "sandy" : "clay";
@@ -323,7 +374,7 @@ WG.practices = (function () {
         add(bareAfter || sandy ? 1 : 2, "Plant a winter small-grain cover crop", "NRCS 340",
           `Small-grain covers cut wind erosion by two to three orders of magnitude in Southern High Plains tests, and their standing residue protects through ${rt}.`,
           [`Drill cereal rye or wheat right after harvest — the South Plains window is mid-August to Thanksgiving${crop === "peanut" ? "; for peanuts, within days of threshing" : crop === "cotton" ? "" : ""}.`,
-            `Seeding rate: ${irr ? "up to 60 lb/ac irrigated" : "30 lb/ac dryland — 60 lb/ac produced no more biomass and no better cotton yields at Lamesa"}. Alternative: 10–20 lb/ac in bed-shoulder strips, cotton planted on the bed top.`,
+            `Seeding rate: ${irr ? `up to ${L("60 lb/ac")} irrigated` : `${L("30 lb/ac")} dryland — ${L("60 lb/ac")} produced no more biomass and no better cotton yields at Lamesa`}. Alternative: ${L("10–20 lb/ac")} in bed-shoulder strips, cotton planted on the bed top.`,
             `Orient drill rows across the windy-season wind: ${ctx.orient}.`,
             `Terminate with herbicide ${term} before planting${irr ? "" : " — cotton yields matched conventional tillage in 3–4 years of Lamesa and Lubbock trials"}. Crop-insurance termination rules: ≥ 35 days before planting in the arid zone (irrigated fields exempt).`,
             "Leave it standing — no tillage, no haying; if grazed, remove ≤ 50% per grazing cycle (TX 340).",
@@ -338,8 +389,8 @@ WG.practices = (function () {
           "Each tillage pass buries residue and loosens the surface. Standing residue is worth roughly 2–10× the same residue lying flat.",
           ["No full-width tillage from harvest to planting (TX 329: STIR ≤ 20; strip-till strips ≤ 30% of the row width). Reduced till: STIR ≤ 45.",
             `Cover target for this soil: ≥ ${target}% through ${rt}. Flat cover cuts erosion about ${fmt(coverReduction(30) * 100, 0)}% at 30% cover, ${fmt(coverReduction(50) * 100, 0)}% at 50% and ${fmt(coverReduction(70) * 100, 0)}% at 70%.`,
-            crop === "cotton" || crop === "peanut" ? "Do not shred-and-disk cotton stalks in fall; leave them anchored. Strip-till only the planting row." : "Harvest high and leave grain sorghum, corn or wheat stubble standing — 10-in standing wheat stubble across the wind protects like 3.5× its weight of flat straw.",
-            weg === "1" && ctx.C ? `On WEG 1 with C = ${fmt(ctx.C, 0)}, about ${fmt(Math.round(interp(SGE_WEG1, ctx.C) / 50) * 50, 0)} lb/ac flat small-grain-equivalent residue is needed.` : "",
+            crop === "cotton" || crop === "peanut" ? "Do not shred-and-disk cotton stalks in fall; leave them anchored. Strip-till only the planting row." : `Harvest high and leave grain sorghum, corn or wheat stubble standing — ${L("10-in")} standing wheat stubble across the wind protects like 3.5× its weight of flat straw.`,
+            weg === "1" && ctx.C ? `On WEG 1 with C = ${fmt(ctx.C, 0)}, about ${fmt(Math.round(UN.conv("massArea", interp(SGE_WEG1, ctx.C)) / 50) * 50, 0)}${NB}${UN.sym("massArea")} flat small-grain-equivalent residue is needed.` : "",
             "Never till on dry, windy days."],
           `Year-round · most important ${rt}`, { on: [9, 10, 11, 0, 1, 2, 3, 4] }, ["tx329", "tx345", "neb"]);
       } else {
@@ -356,12 +407,12 @@ WG.practices = (function () {
           "Plan the rotation each year", null, ["tx340g", "lubbock"]);
       }
       add(sandy || crop === "peanut" ? 1 : 2, "Herbaceous wind barriers or cross-wind trap strips", "NRCS 603 / 589C",
-        `Barriers shorten the open distance the wind works over and protect seedlings — cotton and peanuts tolerate only about 1 t/ac of blowing soil while small.`,
-        [`Barriers: annual forage sorghum or pearl millet rows ≥ 1.5 ft tall, 40–50% porous, spaced ≤ 10× their height — e.g. a 3-ft barrier every ≤ 30 ft, a 6-ft forage sorghum barrier every ≤ 60 ft. Within-row plant spacing ≤ 36 in; fill gaps of 10–15 ft.`,
-          "Trap strips: ≥ 15 ft wide (measured along the wind) of vegetation ≥ 1 ft tall during the windy season, on the windward field edge or alternating with crop strips.",
-          sandy ? "On sands, erosion-susceptible crop strips between barriers should be narrow — historically about 20 ft on sand." : "",
+        `Barriers shorten the open distance the wind works over and protect seedlings — cotton and peanuts tolerate only about ${L("1 t/ac")} of blowing soil while small.`,
+        [`Barriers: annual forage sorghum or pearl millet rows ≥ ${L("1.5 ft")} tall, 40–50% porous, spaced ≤ 10× their height — e.g. a ${L("3-ft")} barrier every ≤ ${L("30 ft")}, a ${L("6-ft")} forage sorghum barrier every ≤ ${L("60 ft")}. Within-row plant spacing ≤ ${L("36 in")}; fill gaps of ${L("10–15 ft")}.`,
+          `Trap strips: ≥ ${L("15 ft")} wide (measured along the wind) of vegetation ≥ ${L("1 ft")} tall during the windy season, on the windward field edge or alternating with crop strips.`,
+          sandy ? `On sands, erosion-susceptible crop strips between barriers should be narrow — historically about ${L("20 ft")} on sand.` : "",
           `Orientation: ${ctx.orient}.`,
-          "Sow summer barriers Jul–Aug so they stand ≥ 1.5–3 ft by frost; leave them through April."],
+          `Sow summer barriers Jul–Aug so they stand ≥ ${L("1.5–3 ft")} by frost; leave them through April.`],
         "Sow Jul–Aug · standing through Apr", { act: [6, 7], on: [8, 9, 10, 11, 0, 1, 2, 3] }, ["tx603", "n589"]);
       if (a.barrier !== "yes") {
         add(3, "Field windbreak (long term)", "NRCS 380",
@@ -372,9 +423,9 @@ WG.practices = (function () {
           "Plant late winter", null, ["fotg", "tfs"]);
       }
       const sandSpecs = sandy
-        ? ["Sands: lister bottoms 40–50 in apart, 4–12 in deep (first pass ≤ 4–5 in, deeper on repeats) — only when the soil is moist enough to form clods.",
+        ? [`Sands: lister bottoms ${L("40–50 in")} apart, ${L("4–12 in")} deep (first pass ≤ ${L("4–5 in", null, { sq: 1 })}, deeper on repeats) — only when the soil is moist enough to form clods.`,
           weg === "1" ? "On WEG 1 sands stable clods are hard to form, so roughening is unreliable — treat it strictly as a stop-gap." : ""]
-        : ["Loams and clays: chisel with 2-in points on 24–54 in spacing, 3–6 in deep (narrower spacing on bare ground)."];
+        : [`Loams and clays: chisel with ${L("2-in")} points on ${L("24–54 in")} spacing, ${L("3–6 in")} deep (narrower spacing on bare ground).`];
       add(bareAfter ? 2 : 3, "Emergency surface roughening only if cover fails", "NRCS 609 / 588",
         "Ridges and clods trap moving soil for a short time; it is a backstop, not a plan.",
         [`Start on the windward edge, ridges across the wind (≤ 45° off perpendicular); ridge spacing ≤ 4× ridge height.`,
@@ -394,8 +445,13 @@ WG.practices = (function () {
       if (ctx.E) {
         residueTable = [0, 500, 1000, 1500, 2000].map(sge => [sge, ctx.E * interp(SGE_RATIO, sge)]);
       }
-      if (crop === "peanut") notes.push("Peanut digging inverts the soil and leaves almost no anchored residue, and peanuts tolerate only ~1 t/ac of blowing soil. Drill rye or wheat immediately after harvest and add sorghum or small-grain barrier strips on WEG 1–2 soils.");
-      if (crop === "cotton" && bareAfter) notes.push("Cotton stalks are light and usually shredded and incorporated after harvest on the Southern High Plains, which leaves the field effectively bare by February. Standing stalks plus a terminated small-grain cover is the proven combination here (more than a million South Plains acres a year).");
+      if (crop === "peanut") notes.push(`Peanut digging inverts the soil and leaves almost no anchored residue, and peanuts tolerate only ~${L("1 t/ac")} of blowing soil. Drill rye or wheat immediately after harvest and add sorghum or small-grain barrier strips on WEG 1–2 soils.`);
+      if (crop === "cotton" && bareAfter) {
+        // "more than" a million acres: round the converted area down to two figures
+        const mAc = UN.conv("area", UN.fromUnit("area", 1e6, "ac")), p = 10 ** (Math.floor(Math.log10(mAc)) - 1);
+        const where = cvd("area", "ac") ? `${fmt(Math.floor(mAc / p) * p, 0)}${NB}${UN.sym("area")} [a million acres] of South Plains fields` : "a million South Plains acres";
+        notes.push(`Cotton stalks are light and usually shredded and incorporated after harvest on the Southern High Plains, which leaves the field effectively bare by February. Standing stalks plus a terminated small-grain cover is the proven combination here (more than ${where} a year).`);
+      }
       notes.push("Texas also has a secondary erosive period in Dec–Jan from strong north winds behind cold fronts (USDA-ARS Big Spring) — have cover in place by about Dec 1.");
     }
 
@@ -407,13 +463,13 @@ WG.practices = (function () {
       add(1, "Prescribed grazing at 25% harvest efficiency", "NRCS 528",
         "Keeping cover is the main wind-erosion control on rangeland. \"Take half, leave half\" really means livestock eat about a quarter — the rest of the half 'taken' goes to trampling, insects, wildlife and weathering.",
         [`Set stocking from median-year forage production at ${util}${lpc ? " (WAFWA lesser prairie-chicken agreement: ≤ 33% utilization)" : ""}.`,
-          "Minimum stubble: sideoats grama ≥ 6 in; little bluestem and Indiangrass 6–8 in; sand bluestem and giant sandreed ≈ 8–10 in; buffalograss ≈ 2 in; blue grama ≈ 1.5 in.",
+          `Minimum stubble: sideoats grama ≥ ${L("6 in")}; little bluestem and Indiangrass ${L("6–8 in")}; sand bluestem and giant sandreed ≈ ${L("8–10 in")}; buffalograss ≈ ${L("2 in")}; blue grama ≈ ${L("1.5 in")}.`,
           sandy ? "Sandy site: avoid heavy winter and early-spring grazing that removes standing cover before the Mar–Apr peak." : "",
           a.graze === "cont" ? "Move from continuous to a rotation or deferment so each pasture gets growing-season rest every 2–3 years." : "Keep rotating; rest to frost benefits warm-season grasses."],
         `Residue in place by Nov 1 and kept through Apr 1`, { on: [10, 11, 0, 1, 2, 3] }, ["he", "tx528", "pmc"]);
       add(drought ? 1 : 2, "Drought contingency plan with decision dates", "NRCS 528 (required in Texas)",
         "Overgrazing during drought is how rangeland becomes a dust source. Decide on dates, not on hope.",
-        ["Apr 1 — check residue height and lb/ac against your target.", "Jun 15 — estimate the year's production and adjust numbers.",
+        [`Apr 1 — check residue height and ${UN.sym("massArea")} against your target.`, "Jun 15 — estimate the year's production and adjust numbers.",
           "Jul 15 — start estimating end-of-season residue.", "Aug 15 — calculate available forage; rest to frost if you can.",
           "Nov 1 — end of growing season; less than 80% of average annual rain signals drought next season.",
           drought ? "In drought now: reduce numbers before cover drops further; feed in one sacrifice area on a non-sandy site." : ""],
@@ -421,9 +477,9 @@ WG.practices = (function () {
       if (cond === "poor") {
         add(1, sandy && ctx.dunes ? "Rest first; seed only where needed" : "Range planting where desirable grasses are scarce", "NRCS 550",
           "Seed only where desirable species make up less than about 10% of the vegetation; otherwise rest lets the stand recover.",
-          ["Drill with double-disk openers and depth bands, rows ≤ 12 in apart, ¼–½ in deep (never deeper than ¾ in), then press wheels or a cultipacker.",
+          [`Drill with double-disk openers and depth bands, rows ≤ ${L("12 in")} apart, ${L("¼–½ in")} deep (never deeper than ${L("¾ in", null, { sq: 1 })}), then press wheels or a cultipacker.`,
             "Firm, weed-free seedbed — or a dead-litter cover (e.g. last summer's forage sorghum) where blowing sand would cut seedlings.",
-            "Use seed collected within ~200 mi north–south and ~100 mi east–west of the site.",
+            `Use seed collected within ~${L("200 mi")} north–south and ~${L("100 mi")} east–west of the site.`,
             "Defer grazing at least one full growing season (planting to killing frost).",
             ctx.dunes ? "Sand Hills sites: reseeding is difficult and not usually successful — favor deferment and rest." : ""],
           `Seed ${seedWindow}`, { act: seedMonths }, ["tx550", "texnat", "sandhills"]);
@@ -455,9 +511,9 @@ WG.practices = (function () {
       if (shrub === "shinnery" || shrub === "sage") {
         add(1, `${shrub === "shinnery" ? "Shinnery oak" : "Sand sagebrush"}: low-rate tebuthiuron in a mosaic`, "NRCS 314 / WAFWA",
           "Control can release tall grasses but is controversial because it can open sandy soils to wind erosion.",
-          ["Tebuthiuron about 0.3 lb a.i./ac, aerial (WAFWA template; NRCS New Mexico 0.3–0.75 lb for partial control).",
+          [`Tebuthiuron about ${L("0.3 lb a.i./ac")}, aerial (WAFWA template; NRCS New Mexico ${L("0.3–0.75 lb a.i./ac", null, { mass: 1, sq: 1 })} for partial control).`,
             "Only on medium to dense stands that have grassland potential; kill can take two or more growing seasons.",
-            "Treat ≤ 50% of the property in any 2-year period; no treatment within 150 ft of dunes or blowouts; no repeat treatments.",
+            `Treat ≤ 50% of the property in any 2-year period; no treatment within ${L("150 ft")} of dunes or blowouts; no repeat treatments.`,
             "Defer grazing ≥ 2 years, then 1–2 years of dormant-season (Nov–Mar) grazing at ≤ 33% utilization."],
           "Before the growing-season rains · defer 2 years", { act: [2, 3] }, ["wafwa", "nm314"]);
       } else if (shrub === "mesquite") {
@@ -470,7 +526,7 @@ WG.practices = (function () {
         add(2, "Creosotebush: protect cover; convert only where grassland potential exists", "NRCS 314 / 528",
           "Where creosote is the reference community in the ecological site, do not try to convert it.",
           ["Avoid off-road traffic and concentrated grazing that break biological soil crusts.",
-            "Tebuthiuron (0.3–0.75 lb a.i./ac, partial control) only on medium–dense stands with grassland potential and adequate rainfall."],
+            `Tebuthiuron (${L("0.3–0.75 lb a.i./ac", null, { sq: 1 })}, partial control) only on medium–dense stands with grassland potential and adequate rainfall.`],
           "Any time", null, ["nm314", "alvarez"]);
       } else if (shrub === "juniper") {
         add(2, "Juniper: control for forage and water; wind risk is low here", "NRCS 314",
@@ -500,24 +556,24 @@ WG.practices = (function () {
       title = "Pasture / hayland";
       summary = `Forage fields protect soil while stands are thick and stubble is left. The risk comes from low fall cutting, overgrazed winter pasture and failed stands going into ${rt}.`;
       add(1, "Leave stubble: cutting and grazing heights", "NRCS 511 / 528",
-        "The last cutting or grazing should leave regrowth so ≥ 4–6 in of stubble stands through Feb–May.",
-        ["Minimum cutting heights: bermudagrass 2–3 in; Old World bluestem and weeping lovegrass 3–4 in; sand bluestem and Indiangrass 4–6 in; sudan, millet and sorghum-sudan 6–10 in; wheat 2–4 in.",
-          pt === "annual" ? "Sorghum-sudan: start grazing at 18–24 in tall (prussic acid) and leave 6–8 in. Pull cattle off wheat pasture before it is grazed bare in Feb–Mar." : "",
-          sandy ? "On sandy pasture avoid a fall cut down to ~2 in going into winter." : ""],
+        `The last cutting or grazing should leave regrowth so ≥ ${L("4–6 in")} of stubble stands through Feb–May.`,
+        [`Minimum cutting heights: bermudagrass ${L("2–3 in")}; Old World bluestem and weeping lovegrass ${L("3–4 in")}; sand bluestem and Indiangrass ${L("4–6 in")}; sudan, millet and sorghum-sudan ${L("6–10 in")}; wheat ${L("2–4 in")}.`,
+          pt === "annual" ? `Sorghum-sudan: start grazing at ${L("18–24 in")} tall (prussic acid) and leave ${L("6–8 in")}. Pull cattle off wheat pasture before it is grazed bare in Feb–Mar.` : "",
+          sandy ? `On sandy pasture avoid a fall cut down to ~${L("2 in")} going into winter.` : ""],
         `Last cut early enough for regrowth before frost`, { on: [10, 11, 0, 1, 2, 3, 4] }, ["ok511", "ksu_pa"]);
       if (cond !== "good") {
         add(1, "Re-establish a full stand", "NRCS 512",
           "Thin stands leave bare soil between plants.",
           [sandy ? "WEG 1–2: perennial cover is preferred. Weeping lovegrass ('Ermelo', 'Morpa') is adapted to sands but turns unpalatable without fertilizer and frequent short grazing; native sand-adapted mixes are longer-lived." : "",
-            "WW-B.Dahl Old World bluestem suits low-water pastures (productive with ≤ 9 in of irrigation a year) — keep it on fenced pasture, never next to native range.",
-            ctx.dry && pt !== "irr" ? "Under ~18 in of rain, avoid bermudagrass and kleingrass on dryland." : "Kleingrass: 1.5 lb PLS/ac drilled. Bermudagrass: irrigated only.",
+            `WW-B.Dahl Old World bluestem suits low-water pastures (productive with ≤ ${L("9 in", "precip", { sq: 1 })} of irrigation a year) — keep it on fenced pasture, never next to native range.`,
+            ctx.dry && pt !== "irr" ? `Under ~${L("18 in", "precip")} of rain, avoid bermudagrass and kleingrass on dryland.` : `Kleingrass: ${L("1.5 lb PLS/ac")} drilled. Bermudagrass: irrigated only.`,
             "Plant into last summer's sorghum or millet stubble to shelter seedlings; defer grazing at least one full growing season."],
           `Seed ${seedWindow}`, { act: seedMonths }, ["tx512", "sare"]);
       }
       if (pt === "annual") {
         add(2, "No-till annual forages into residue", "NRCS 340 / 329",
           "Clean-tilled wheat-pasture seedbeds are as erodible as bare cropland until the crop covers.",
-          ["No-till drill wheat, rye or triticale into sorghum or millet stubble; follow summer annuals with a winter small grain, or leave ≥ 8 in of stubble.",
+          [`No-till drill wheat, rye or triticale into sorghum or millet stubble; follow summer annuals with a winter small grain, or leave ≥ ${L("8 in")} of stubble.`,
             sandy ? "On WEG 1–2, avoid clean-tilled annual forage altogether." : ""],
           "Sep–Oct (winter annuals) · May–Jun (summer annuals)", { act: [8, 9, 4, 5] }, ["tx340"]);
         coverTable = [COVER.rye, COVER.wheat, COVER.triticale, COVER.sorghum, COVER.millet];
@@ -530,8 +586,8 @@ WG.practices = (function () {
       if (a.stage === "new" || a.cond === "poor") {
         add(1, "Establish grass into a dead-litter sorghum cover", "NRCS 327 / 550 / 342",
           "Seedlings in open sand get cut down by blowing sand; standing dead sorghum shelters them.",
-          ["Plant forage sorghum (haygrazer) the summer before; mow or hay to leave 8–10 in of stubble; it must be dead before you seed.",
-            "Next spring, drill the native mix into the stubble with a grass drill (rows ≤ 12 in), ½–¾ in deep.",
+          [`Plant forage sorghum (haygrazer) the summer before; mow or hay to leave ${L("8–10 in")} of stubble; it must be dead before you seed.`,
+            `Next spring, drill the native mix into the stubble with a grass drill (rows ≤ ${L("12 in", null, { sq: 1 })}), ${L("½–¾ in")} deep.`,
             "Avoid Old World bluestems and weeping lovegrass where the land may go back to native range."],
           `Sorghum cover May–Jul · grass seeding ${seedWindow}`, { act: seedMonths.concat([5, 6]), on: [9, 10, 11, 0, 1] }, ["tx342", "csu", "tx327"]);
         species = speciesRows(ctx);
@@ -539,7 +595,7 @@ WG.practices = (function () {
       }
       if (a.stage === "exp") {
         const rule = weg === "1" ? "WEG 1: do not convert — re-enroll or graze it (about 25% harvest efficiency)."
-          : weg === "2" ? "WEG 2: convert in strips and keep permanent strips of the old CRP grass (≥ 15 ft wide, ≤ 10× height apart) as trap strips."
+          : weg === "2" ? `WEG 2: convert in strips and keep permanent strips of the old CRP grass (≥ ${L("15 ft", null, { sq: 1 })} wide, ≤ 10× height apart) as trap strips.`
             : "Kill the sod chemically and no-till a high-residue first crop (wheat or grain sorghum).";
         add(1, "Convert expiring CRP without plowing", "NRCS 329 / 328 / 589C",
           "Clean-tilling old CRP sod leaves little residue and some of the region's worst blowing followed.",
@@ -561,7 +617,7 @@ WG.practices = (function () {
     else if (lu === "disturbed") {
       const dt = a.dtype || "pad", stage = a.stage || "spring";
       title = "Disturbed land — " + { pad: "well pad / caliche site", pipe: "pipeline right-of-way", build: "construction site", road: "unpaved roads and lots" }[dt];
-      summary = "Bladed sites lose their crust and topsoil; every bare acre upwind feeds dust and sand onto neighbors and roads.";
+      summary = `Bladed sites lose their crust and topsoil; every bare ${AREA_WORD[UN.sym("area")] || UN.sym("area")} upwind feeds dust and sand onto neighbors and roads.`;
       if (dt === "road") {
         add(1, "Dust control on unpaved surfaces", "NRCS 373",
           "Traffic grinds caliche and soil into fine dust that blows in every wind.",
@@ -571,28 +627,28 @@ WG.practices = (function () {
       if (stage === "fall") {
         add(1, "Temporary cover plus mulch right away", "NRCS 342 / 484",
           `A site that goes into ${rt} bare will blow; temporary cover holds it until the permanent seeding window.`,
-          ["Cool-season temporary cover (oats and wheat; TxDOT window Sep 1–Jan 31), or Brownton millet 20 lb/ac Feb 1–Aug 30.", "Mulch over it (below)."],
+          [`Cool-season temporary cover (oats and wheat; TxDOT window Sep 1–Jan 31), or Brownton millet ${L("20 lb/ac")} Feb 1–Aug 30.`, "Mulch over it (below)."],
           "Immediately", { act: [8, 9, 10, 11, 0] }, ["txdot"]);
       }
       add(1, "Salvage and respread topsoil; keep the footprint small", "Reclamation",
         "Native topsoil carries seed, organic matter and crust organisms; caliche and subsoil revegetate poorly.",
         ["Strip topsoil separately; never salvage when wet or frozen; keep stockpiles low and seeded.",
-          "At reclamation remove caliche and gravel pads, rip compacted subsoil about 12–18 in, respread about 4–6 in of topsoil (guideline).",
+          `At reclamation remove caliche and gravel pads, rip compacted subsoil about ${L("12–18 in")}, respread about ${L("4–6 in")} of topsoil (guideline).`,
           "Reclaim unused parts of pads as soon as drilling and completion end."],
         "At construction and immediately after", null, []);
       add(1, "Critical area planting with native seed", "NRCS 342",
-        `Permanent native cover is the long-term fix${dt === "pipe" ? " — Texas Native Seeds mixes were used on about 8,000 ac of the Shin Oak NGL pipeline from west of Midland" : ""}.`,
-        [ctx.region === "tp" || ctx.dist === "Odessa" ? "Permian: the University Lands approved mix (3.79 lb PLS/ac, below) or the TxDOT district mix." : "Use the TxDOT district mix or the native species below.",
-          "Drill ¼–⅓ in deep; leave the seedbed somewhat rough but firm (pack before and after seeding).",
+        `Permanent native cover is the long-term fix${dt === "pipe" ? ` — Texas Native Seeds mixes were used on about ${L("8,000 ac")} of the Shin Oak NGL pipeline from west of Midland` : ""}.`,
+        [ctx.region === "tp" || ctx.dist === "Odessa" ? `Permian: the University Lands approved mix (${L("3.79 lb PLS/ac", null, { sq: 1, d: 2 })}, below) or the TxDOT district mix.` : "Use the TxDOT district mix or the native species below.",
+          `Drill ${L("¼–⅓ in")} deep; leave the seedbed somewhat rough but firm (pack before and after seeding).`,
           sandy ? "Sandy soil: mulch is mandatory; add pearl millet or sorghum nurse or barrier rows." : "Caliche or clay: rip, then use the clay mix."],
         `Seed ${seedWindow}`, { act: seedMonths }, ["tx342", "ul", "txdot", "tns"]);
       add(1, "Mulch to hold the surface while seed establishes", "NRCS 484",
         "Mulch stops blowing immediately; aim for about 70% ground cover.",
-        ["Straw 2–2.5 t/ac or hay 1.5–2 t/ac, tacked or crimped in.", "Hydromulch on sandy soils: 2,500 lb/ac (slopes ≤ 3:1) or 3,000 lb/ac on steeper slopes."],
+        [`Straw ${L("2–2.5 t/ac")} or hay ${L("1.5–2 t/ac")}, tacked or crimped in.`, `Hydromulch on sandy soils: ${L("2,500 lb/ac")} (slopes ≤ 3:1) or ${L("3,000 lb/ac")} on steeper slopes.`],
         "At seeding", null, ["txdot"]);
       species = speciesRows(ctx);
       mix = ctx.region === "tp" || ctx.dist === "Odessa"
-        ? { title: "University Lands approved Permian seed mix (all listed counties)", rows: UL_MIX, note: "lb PLS/ac, total 3.79. Includes a pearl millet nurse crop and native forbs.", ref: "ul" }
+        ? { title: "University Lands approved Permian seed mix (all listed counties)", rows: UL_MIX, note: `${usym("massArea", "PLS")}, total ${cell("massArea", 3.79, "lb/ac", 2)}. Includes a pearl millet nurse crop and native forbs.`, ref: "ul" }
         : mixFor(txGroup);
       notes.push("Texas Railroad Commission rules govern pit closure and site restoration after drilling (the former 16 TAC §3.8 required pits to be backfilled within one year; rules moved to Chapter 4 in 2024 — check current deadlines). Surface-use agreements often set topsoil and reseeding terms.");
     }
@@ -608,18 +664,18 @@ WG.practices = (function () {
       if (bt !== "caliche") {
         add(1, "Mulch the moving sand", "NRCS 484",
           "On migrating inland Texas dunes, native prairie-hay mulch with grazing excluded stopped sand movement and let vegetation establish — seeding, fertilizer and transplants were not needed.",
-          ["Organic mulch about 2–3 t/ac (Nebraska blowout guidance); fence and mulch before February.",
+          [`Organic mulch about ${L("2–3 t/ac")} (Nebraska blowout guidance); fence and mulch before February.`,
             "Cotton-bur mulch improves seedbed moisture, but heavy rates block seedling emergence.",
             `Brush slash or hay laid across the wind (${ctx.orient}) on the most active faces.`],
           "Before Feb", { act: [10, 11, 0] }, ["fulbright"]);
         add(2, "Seed sand-adapted grasses into the mulch", "NRCS 342 / 550",
           "Deep-rooted, rhizomatous grasses hold dunes once established.",
           ["Giant sandreed, sand bluestem, giant dropseed, Havard panicum and sand lovegrass; keep shinnery oak and sand sagebrush that are already there.",
-            "Small blowouts (< ¼ ac) recover best; out-of-state guidance uses ≥ 60 PLS/ft² drilled or 120 broadcast."],
+            `Small blowouts (< ${L("¼ ac", null, { sq: 1 })}) recover best; out-of-state guidance uses ≥ ${L("60 PLS/ft²")} drilled or ${L("120 PLS/ft²", null, { n: 1 })} broadcast.`],
           `Seed ${seedWindow}`, { act: seedMonths }, ["tx342"]);
         species = speciesRows(ctx, "sandy");
         if (ctx.dunes || ctx.region === "tp") {
-          notes.push("Monahans-type dunes are held partly by shinnery oak roots; some are naturally active and may not be practical to restore — protect their stabilized margins instead. Do not till or treat brush here, and keep a 150-ft no-treatment buffer around dunes for any brush work nearby.");
+          notes.push(`Monahans-type dunes are held partly by shinnery oak roots; some are naturally active and may not be practical to restore — protect their stabilized margins instead. Do not till or treat brush here, and keep a ${L("150-ft")} no-treatment buffer around dunes for any brush work nearby.`);
         }
       } else {
         add(2, "Stabilize edges and traffic areas", "NRCS 373 / 342",
@@ -630,11 +686,11 @@ WG.practices = (function () {
 
     // soil- and site-specific notes
     // name the group by number and I: the survey's group does not always match a texture name
-    if (weg === "1" || weg === "2") notes.unshift(`This surface is WEG ${weg} (I = ${fmt(ctx.I, 0)} t/ac/yr), among the most erodible soils. Roughness alone does not last; rely on ≥ 60% cover.`);
-    else if (weg === "3") notes.unshift(`This surface is WEG 3 (I = ${fmt(ctx.I, 0)} t/ac/yr): highly erodible when bare and dry. Cover crops or standing sorghum/wheat stubble, with chisel or lister roughening as a backstop.`);
-    else if (weg === "4L") notes.unshift(`Calcareous surface (WEG 4L, I = ${fmt(ctx.I, 0)} t/ac/yr): carbonates weaken clods and crusts abrade quickly, so these soils blow more than their texture suggests. Avoid pulverizing tillage; keep residue plus roughness.`);
-    else if (weg === "4") notes.unshift(`Clayey surface (WEG 4, I = ${fmt(ctx.I, 0)} t/ac/yr): clods resist wind when moist, but drying and freeze–thaw in late winter break them into erodible aggregates — keep residue through spring.`);
-    else if (["5", "6", "7"].includes(weg)) notes.unshift(`WEG ${weg} (I = ${fmt(ctx.I, 0)} t/ac/yr): moderately erodible; residue management and chisel roughening are usually enough, trap strips optional.`);
+    if (weg === "1" || weg === "2") notes.unshift(`This surface is WEG ${weg} (I = ${UN.fmt("soilLoss", ctx.I, 0)}), among the most erodible soils. Roughness alone does not last; rely on ≥ 60% cover.`);
+    else if (weg === "3") notes.unshift(`This surface is WEG 3 (I = ${UN.fmt("soilLoss", ctx.I, 0)}): highly erodible when bare and dry. Cover crops or standing sorghum/wheat stubble, with chisel or lister roughening as a backstop.`);
+    else if (weg === "4L") notes.unshift(`Calcareous surface (WEG 4L, I = ${UN.fmt("soilLoss", ctx.I, 0)}): carbonates weaken clods and crusts abrade quickly, so these soils blow more than their texture suggests. Avoid pulverizing tillage; keep residue plus roughness.`);
+    else if (weg === "4") notes.unshift(`Clayey surface (WEG 4, I = ${UN.fmt("soilLoss", ctx.I, 0)}): clods resist wind when moist, but drying and freeze–thaw in late winter break them into erodible aggregates — keep residue through spring.`);
+    else if (["5", "6", "7"].includes(weg)) notes.unshift(`WEG ${weg} (I = ${UN.fmt("soilLoss", ctx.I, 0)}): moderately erodible; residue management and chisel roughening are usually enough, trap strips optional.`);
     if (ctx.om !== null && ctx.om < 1) notes.push(`Surface organic matter is low (${fmt(ctx.om, 1)}%). Residue, cover crops and less tillage build aggregate stability over time.`);
     if (ctx.EI !== null && ctx.EI >= 8 && (lu === "cropland" || lu === "crp")) notes.push(`Erodibility index C·I/T = ${fmt(ctx.EI, 1)} (≥ 8): likely highly erodible land under USDA conservation compliance (7 CFR 12.21) — a conservation plan is needed for farm-program eligibility.`);
 
@@ -683,8 +739,8 @@ WG.practices = (function () {
       return `<a href="${R[k][1]}" target="_blank" rel="noopener" title="${esc(R[k][0])}">[${i + 1}]</a>`;
     }).join(" ");
     const chips = [
-      ctx.level ? `<span class="chip">Bare-soil risk: ${LEVEL[ctx.level]} (${fmt(ctx.E, 0)} t/ac/yr)</span>` : "",
-      `<span class="chip">Windy season: ${esc(ctx.riskText)}</span>`,
+      ctx.level ? `<span class="chip">Bare-soil risk: ${LEVEL[ctx.level]} (${UN.fmtCls("soilLoss", ctx.E, 0)})</span>` : "",
+      `<span class="chip">Windy season: ${esc(ctx.riskText)}${ctx.seasonNote ? ` (${esc(ctx.seasonNote)})` : ""}</span>`,
       ctx.weg ? `<span class="chip" title="Wind Erodibility Group, 1 (most erodible) to 8 (not erodible)">WEG ${esc(ctx.weg)} · cover target ≥ ${coverTarget(ctx.weg)}%</span>` : "",
       `<span class="chip">${esc(ctx.regionName)}${ctx.mlra ? " · MLRA " + esc(ctx.mlra) : ""}</span>`,
       ctx.eco ? `<span class="chip">${esc(ctx.eco)}</span>` : "",
@@ -707,22 +763,22 @@ WG.practices = (function () {
     <div class="chart-legend"><span><i class="sw red"></i>High wind risk</span><span><i class="sw amber"></i>Elevated</span><span><i class="sw" style="background:var(--risk-1)"></i>Cover / protection in place</span><span><i class="sw" style="background:var(--blue)"></i>Action window</span></div>`;
 
     const resid = p.residueTable ? `<div class="card"><div class="card-h"><h3>How much residue is enough here?</h3></div>
-      <div class="table-wrap"><table class="grid"><thead><tr><th>Flat small-grain-equivalent residue</th>${p.residueTable.map(r => `<th>${fmt(r[0], 0)}<small>lb/ac</small></th>`).join("")}</tr></thead>
-      <tbody><tr><td>Est. annual loss, wide field</td>${p.residueTable.map(r => `<td>${fmt(r[1], r[1] < 10 ? 1 : 0)}</td>`).join("")}</tr></tbody></table></div>
-      <p class="fine">Scaled from the NRCS WEQ E-table (NAM Exhibit 502-1) to this site's bare-soil potential; approximate. Standing residue counts more: 1,000 lb/ac of standing sorghum ≈ 1,300 lb/ac flat equivalent, standing 10-in wheat stubble ≈ 3,500, flat sorghum stalks ≈ 350 (NebGuide G1537). ${cite(["fotg", "neb"])}</p></div>` : "";
+      <div class="table-wrap"><table class="grid"><thead><tr><th>Flat small-grain-equivalent residue</th>${p.residueTable.map(r => `<th>${nums("massArea", r[0], undefined, "lb/ac")}<small>${esc(UN.sym("massArea"))}</small></th>`).join("")}</tr></thead>
+      <tbody><tr><td>Est. annual loss, wide field (${esc(UN.sym("soilLoss"))})</td>${p.residueTable.map(r => `<td>${UN.num("soilLoss", r[1], UN.conv("soilLoss", r[1]) < 10 ? 1 : 0)}</td>`).join("")}</tr></tbody></table></div>
+      <p class="fine">Scaled from the NRCS WEQ E-table (NAM Exhibit 502-1) to this site's bare-soil potential; approximate. Standing residue counts more: ${L("1,000 lb/ac")} of standing sorghum ≈ ${L("1,300 lb/ac")} flat equivalent, standing ${L("10-in")} wheat stubble ≈ ${L("3,500 lb/ac", null, { n: 1 })}, flat sorghum stalks ≈ ${L("350 lb/ac", null, { n: 1 })} (NebGuide G1537). ${cite(["fotg", "neb"])}</p></div>` : "";
     const cv = p.coverTable ? `<div class="card"><div class="card-h"><h3>Cover crop options</h3></div>
-      <div class="table-wrap"><table class="grid species"><thead><tr><th>Crop</th><th>Scientific name</th><th>Notes</th><th>lb/ac</th></tr></thead>
-      <tbody>${p.coverTable.map(r => `<tr><td>${esc(r[0])}</td><td class="l"><i>${esc(r[1])}</i></td><td class="l">${esc(r[2])}</td><td>${esc(r[3])}</td></tr>`).join("")}</tbody></table></div>
+      <div class="table-wrap"><table class="grid species"><thead><tr><th>Crop</th><th>Scientific name</th><th>Notes</th><th>${esc(UN.sym("massArea"))}${cvd("massArea", "lb/ac") ? "<small>(lb/ac)</small>" : ""}</th></tr></thead>
+      <tbody>${p.coverTable.map(r => `<tr><td>${esc(r[0])}</td><td class="l"><i>${esc(r[1])}</i></td><td class="l">${esc(r[2])}</td><td>${esc(rate(r[3]))}</td></tr>`).join("")}</tbody></table></div>
       <p class="fine">Plant/terminate dates must follow the Texas Cover Crop Calculator (±10 days with justification); broadcast at 150% of the drilled rate. ${cite(["tx340", "tx340g", "delaune"])}</p></div>` : "";
-    const mx = p.mix ? `<div class="card"><div class="card-h"><h3>Ready-made seed mix</h3><span class="tag">${fmt(p.mix.rows.reduce((s, r) => s + r[1], 0), 2)} lb PLS/ac</span></div>
+    const mx = p.mix ? `<div class="card"><div class="card-h"><h3>Ready-made seed mix</h3><span class="tag">${esc(L(`${fmt(p.mix.rows.reduce((s, r) => s + r[1], 0), 2)} lb PLS/ac`, null, { d: 2 }))}</span></div>
       <p class="fine" style="margin:0 0 8px">${esc(p.mix.title)}</p>
-      <div class="table-wrap"><table class="grid species"><thead><tr><th>Species</th><th>lb PLS/ac</th></tr></thead>
-      <tbody>${p.mix.rows.map(r => `<tr><td>${esc(r[0])}</td><td>${fmt(r[1], 2)}</td></tr>`).join("")}</tbody></table></div>
+      <div class="table-wrap"><table class="grid species"><thead><tr><th>Species</th><th>${esc(usym("massArea", "PLS"))}${cvd("massArea", "lb/ac") ? "<small>(lb PLS/ac)</small>" : ""}</th></tr></thead>
+      <tbody>${p.mix.rows.map(r => `<tr><td>${esc(r[0])}</td><td>${cell("massArea", r[1], "lb/ac", 2)}</td></tr>`).join("")}</tbody></table></div>
       <p class="fine">${esc(p.mix.note)} ${cite([p.mix.ref])}</p></div>` : "";
     const sp = p.species && p.species.length ? `<div class="card"><div class="card-h"><h3>Adapted native species</h3><span class="tag">${esc(ctx.regionName)} · ${esc(ctx.soilGroup)} soils</span></div>
-      <div class="table-wrap"><table class="grid species"><thead><tr><th>Species</th><th>Scientific name</th><th>Releases / sources</th><th>PLS lb/ac<small>pure stand</small></th></tr></thead>
-      <tbody>${p.species.map(r => `<tr><td>${esc(r[0])}</td><td class="l"><i>${esc(r[1])}</i></td><td class="l">${esc(r[2])}</td><td>${r[3] ?? "—"}</td></tr>`).join("")}</tbody></table></div>
-      <p class="fine">Mix 3–6 species; each species' rate ≈ its pure-stand rate × its share of the mix. Use certified PLS collected within ~200 mi north–south and ~100 mi east–west of the site, and confirm with your NRCS office. ${cite(["texnat", "tx550", "txdot"])}</p></div>` : "";
+      <div class="table-wrap"><table class="grid species"><thead><tr><th>Species</th><th>Scientific name</th><th>Releases / sources</th><th>PLS ${esc(UN.sym("massArea"))}<small>pure stand${cvd("massArea", "lb/ac") ? " (lb/ac)" : ""}</small></th></tr></thead>
+      <tbody>${p.species.map(r => `<tr><td>${esc(r[0])}</td><td class="l"><i>${esc(r[1])}</i></td><td class="l">${esc(typeof r[2] === "function" ? r[2]() : r[2])}</td><td>${r[3] === null || r[3] === undefined ? "—" : cell("massArea", r[3], "lb/ac", 1, String(r[3]))}</td></tr>`).join("")}</tbody></table></div>
+      <p class="fine">Mix 3–6 species; each species' rate ≈ its pure-stand rate × its share of the mix. Use certified PLS collected within ~${L("200 mi")} north–south and ~${L("100 mi")} east–west of the site, and confirm with your NRCS office. ${cite(["texnat", "tx550", "txdot"])}</p></div>` : "";
     const notes = p.notes.length ? `<div class="card"><div class="card-h"><h3>Site notes</h3></div>${p.notes.map(n => `<p class="note-box" style="margin:0 0 8px">${esc(n)}</p>`).join("")}</div>` : "";
     const body = `<div class="card"><div class="card-h"><h3>Timing calendar</h3></div>${cal}</div>
       <div class="card"><div class="card-h"><h3>Recommended practices, in priority order</h3></div>${pracs}</div>

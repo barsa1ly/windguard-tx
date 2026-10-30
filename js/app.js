@@ -1,6 +1,6 @@
 /* App controller: map, layers, search, site analysis, panel rendering. */
 (function () {
-  const U = WG.util, S = WG.soil, Wd = WG.wind, Ch = WG.charts;
+  const U = WG.util, S = WG.soil, Wd = WG.wind, Ch = WG.charts, UN = WG.units;
   const { $, $$, esc, fmt, num } = U;
   const LAYERS = window.WE_LAYERS;
   const app = $("#app");
@@ -22,9 +22,9 @@
     windAll: null,       // analyses of every available source
     windCompare: null,   // reanalysis vs station statistics
     wind: null,
-    units: "mph",
     thr: 8,
-    period: 10,
+    period: { n: 10 },   // {n: 5|10|20} last n complete years, or {from, to} ISO dates
+    windPeriod: null,    // the period resolved for the model in use (dates, label)
     nlcd: null,
     place: null,
     elev: null,
@@ -33,6 +33,16 @@
   };
   WG.state = state;
   const KEEP_Q = Wd.wtmTrial ? "&wtm=1" : ""; // a local mesonet test survives a reload (the public site ignores ?wtm=1)
+  {
+    const q = new URLSearchParams(location.search);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(q.get("from") || "") && /^\d{4}-\d{2}-\d{2}$/.test(q.get("to") || "")) state.period = { from: q.get("from"), to: q.get("to") };
+    else if (["5", "10", "20"].includes(q.get("period"))) state.period = { n: +q.get("period") };
+    if (q.get("model") === "ecmwf") state.gridModel = "ecmwf"; // checked against the dates with the period controls below
+  }
+  // the period and, when not the default, the gridded model: a reloaded or shared link redoes the same analysis
+  const windQ = () => (state.period.from ? `&from=${state.period.from}&to=${state.period.to}` : state.period.n !== 10 ? `&period=${state.period.n}` : "")
+    + (state.gridModel !== "merra2" ? `&model=${state.gridModel}` : "");
+  const periodLabel = () => (state.windPeriod ? state.windPeriod.label : state.period.from ? `${state.period.from} to ${state.period.to}` : `the last ${state.period.n} years`);
 
   /* ============ MAP ============ */
   const map = L.map("map", { zoomControl: false, preferCanvas: true, worldCopyJump: false, tap: true })
@@ -170,7 +180,7 @@
     $("#baseGrid").innerHTML = Object.entries(bases).map(([k, b]) =>
       `<button data-base="${k}" class="${k === baseKey ? "on" : ""}"><i style="background:${b.thumb}"></i>${esc(b.name)}</button>`).join("");
     const toggle = (group, key, item, swatch) => `<label class="toggle"><input type="checkbox" data-group="${group}" data-key="${key}" ${item.on ? "checked" : ""}>
-      <span>${esc(item.name || item.meta.title)}<small>${esc(item.sub || (item.meta && item.meta.unit) || "")}</small></span>${swatch || ""}</label>`;
+      <span>${esc(item.name || item.meta.title)}<small>${esc(item.sub || (item.meta && (group === "themes" ? legendText(key, item.meta).unit : item.meta.unit)) || "")}</small></span>${swatch || ""}</label>`;
     $("#refToggles").innerHTML = Object.entries(refs).map(([k, r]) => toggle("refs", k, r)).join("");
     $("#themeToggles").innerHTML = Object.entries(themes).map(([k, t]) => toggle("themes", k, t,
       `<i class="sw2" style="background:linear-gradient(90deg,${(t.meta.legend || []).map(l => l.color).join(",")})"></i>`)).join("");
@@ -235,18 +245,28 @@
   $("#sheetBackdrop").addEventListener("click", () => openSheet(false));
 
   /* ---------- legend ---------- */
+  /* legend text in the units table's units: the layer files label soil loss in t/ac/yr and wind in mph */
+  function legendText(key, m) {
+    const sl = v => UN.num("soilLoss", +v, 0), us = UN.sym("soilLoss") === "t/ac/yr", mph = UN.sym("wind") === "mph";
+    const wnd = v => (mph ? v : UN.num("wind", +v * 0.44704, ["m/s", "kn"].includes(UN.sym("wind")) ? 1 : 0));
+    const labels = m.legend.map(l => l.label);
+    if (key === "susceptibility" && !us) return { unit: UN.sym("soilLoss"), labels: labels.map(t => t.replace(/\d+/g, v => UN.edge("soilLoss", +v))), note: m.note.replace("40 t/ac/yr", UN.fmt("soilLoss", 40, 0)).replace("T = 5", `T = ${UN.fmt("soilLoss", 5, 0)}`) };
+    if (key === "weg" && !us) return { unit: m.unit, labels: labels.map(t => t.replace(/I ([\d–]+)/, (_, g) => `I ${g.replace(/\d+/g, sl)}`)), note: m.note.replace("(t/ac/yr, 0–310)", `(${UN.range("soilLoss", 0, 310, 0)})`).replace("share I = 86", `share I = ${sl(86)}`) };
+    if (key === "wind" && !mph) return { unit: `${UN.sym("wind")} at 10 m`, labels: labels.map(t => t.replace(/\d+(\.\d+)?/g, wnd)), note: m.note };
+    return { unit: m.unit, labels, note: m.note };
+  }
   let legendMin = window.matchMedia("(max-width: 767px)").matches;
   function renderLegend() {
-    const active = Object.values(themes).find(t => t.on);
+    const entry = Object.entries(themes).find(([, t]) => t.on);
     const el = $("#legend");
-    if (!active) { el.hidden = true; return; }
-    const m = active.meta;
+    if (!entry) { el.hidden = true; return; }
+    const [key, { meta: m }] = entry, L = legendText(key, m);
     el.hidden = false;
     el.classList.toggle("min", legendMin);
-    el.innerHTML = `<h5><span>${esc(m.title)}${m.unit ? ` <small style="font-weight:400;color:#69716a">(${esc(m.unit)})</small>` : ""}</span>
+    el.innerHTML = `<h5><span>${esc(m.title)}${L.unit ? ` <small style="font-weight:400;color:#69716a">(${esc(L.unit)})</small>` : ""}</span>
       <button id="legendMin">${legendMin ? "show" : "hide"}</button></h5>
-      <div class="rows">${m.legend.map(l => `<div class="row"><i class="sw" style="background:${l.color}"></i>${esc(l.label)}</div>`).join("")}</div>
-      <p class="lnote">${esc(m.note)}</p>`;
+      <div class="rows">${m.legend.map((l, i) => `<div class="row"><i class="sw" style="background:${l.color}"></i>${esc(L.labels[i])}</div>`).join("")}</div>
+      <p class="lnote">${esc(L.note)}</p>`;
     $("#legendMin").onclick = () => { legendMin = !legendMin; renderLegend(); };
   }
   renderLegend();
@@ -450,7 +470,7 @@
     if (wasOpen) map.setView(ll, z, { animate: true });
     else { pendingView = { ll, z }; setLayout("split"); }
 
-    try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}${KEEP_Q}`); } catch (e) { /* file:// */ }
+    try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}${windQ()}${UN.query()}${KEEP_Q}`); } catch (e) { /* file:// */ }
     renderHeader();
     resetPanels();
     showTab("overview");
@@ -461,21 +481,20 @@
     const { lat, lon } = state.site;
     $("#siteName").textContent = state.place || "Selected location";
     $("#siteCoords").textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-    $("#siteElev").textContent = state.elev ? `${fmt(state.elev.z * 3.28084, 0)} ft elev · ${fmt(state.elev.slope, 1)}% slope (${state.elev.src.replace(/ \d+ m.*$/, "")})` : "";
+    $("#siteElev").textContent = state.elev ? `${UN.fmt("elev", state.elev.z)} elev · ${fmt(state.elev.slope, 1)}% slope (${state.elev.src.replace(/ \d+ m.*$/, "")})` : "";
   }
 
   function resetPanels() {
     const rc = $("#riskCard");
     rc.className = "risk-card loading";
     $("#riskLevel").textContent = "Analyzing…";
-    $("#riskText").textContent = `Fetching the soil survey and ${state.period} years of hourly wind for this point…`;
+    $("#riskText").textContent = `Fetching the soil survey and hourly wind for ${periodLabel()}…`;
     Ch.gauge($("#riskGauge"), null);
     renderRiskScale(0);
     $("#riskUnit").textContent = "";
-    ["stWind", "stHours", "stDir", "stWeg", "stC", "stLc"].forEach(id => {
-      $("#" + id).innerHTML = '<span class="skeleton" style="width:70%"></span>';
-      $("#" + id + "S").textContent = "";
-    });
+    $("#riskFacts").innerHTML = "";
+    $("#glance").innerHTML = ["Mean wind (10 m)", "Erosive wind", "Prevailing erosive wind", "Wind data", "Land cover"]
+      .map(k => `<span class="k">${k}</span><span class="v"><span class="skeleton" style="width:80px"></span></span><span class="n"></span>`).join("");
     renderWegTable(null);
     $("#monthStrip").innerHTML = U.MONTHS.map(m => `<div class="m"><i class="skeleton" style="height:28px"></i>${m[0]}</div>`).join("");
     $("#ovSoil").innerHTML = '<span class="skeleton"></span><span class="skeleton" style="width:60%"></span>';
@@ -526,14 +545,23 @@
       // calibration if it passes the exposure check; gusts stay with the airport.
       state.windStationChoice = null;
       state.windStationPending = true;
-      state.windTower = Wd.towerFirst(lat, lon, state.period);
+      const P = state.windPeriod = Wd.resolvePeriod(state.period, state.gridModel), bad = periodIssue(state.period, state.gridModel);
+      if (bad) throw new Error(bad); // refused when the dates or the model were chosen; never analyse days not asked for
+      state.windTower = Wd.towerFirst(lat, lon, P);
       const tried = []; // every tower read, so a second try never reads one again
       const onTry = s => { tried.push(s.id); if (towerLive()) { state.windTower = s; renderWind(); } };
-      const stationJob = Wd.findStation(lat, lon, state.period).catch(e => { console.warn("station lookup failed", e); return null; });
-      let job = state.windTower ? Wd.findStation(lat, lon, state.period, null, { towers: true, live: towerLive, onTry })
+      const findAirport = per => Wd.findStation(lat, lon, per).catch(e => { console.warn("station lookup failed", e); return null; });
+      let stationJob = findAirport(P);
+      let job = state.windTower ? Wd.findStation(lat, lon, P, null, { towers: true, live: towerLive, onTry })
         .catch(e => { console.warn("tower lookup failed", e); return null; }) : null;
-      const raw = await Wd.fetchWind(lat, lon, state.period, state.gridModel);
+      const raw = await Wd.fetchWind(lat, lon, P, state.gridModel);
       if (!live()) return;
+      const per = state.windPeriod = raw.period; // the other model may have answered, with its own limits
+      if (per !== P) { // other dates: the airport's window must hold them for "station only" and the comparison
+        const T = Wd.trainSpan(P);
+        if (per.d0 < T.d0 || per.d1 > T.d1) stationJob = findAirport(per);
+        U.toast(`${MODEL[state.gridModel].short} did not answer, so ${MODEL[raw.model].short} is used for ${per.label}.`, 6000);
+      }
       state.windSets = { model: raw };
       state.windStation = null;
       state.windAirport = null; // reset with the sets: the old "station only" series and its airport go together
@@ -552,8 +580,8 @@
         const x = towerExposure(tw);
         if (x ? x.ero >= Wd.EXPOSURE_MIN : !state.windAirport) { state.windTower = null; applyStation(tw, tok); return; }
         state.windSkipped.push(tw.meta);
-        job = state.windSkipped.length < 2 && Wd.towerFirst(lat, lon, state.period, tried)
-          ? Wd.findStation(lat, lon, state.period, null, { towers: true, live: towerLive, skip: tried, onTry }).catch(() => null) : null;
+        job = state.windSkipped.length < 2 && Wd.towerFirst(lat, lon, P, tried)
+          ? Wd.findStation(lat, lon, P, null, { towers: true, live: towerLive, skip: tried, onTry }).catch(() => null) : null;
       }
       state.windTower = null;
       renderWind(); renderStats(); // no usable tower: the airport calibration stays
@@ -563,7 +591,7 @@
       state.windStationPending = false;
       state.windTower = null;
       state.wind = { error: err.message || String(err) };
-      renderWind(); renderRisk(); renderStats();
+      renderWind(); renderRisk(); renderStats(); renderPractices();
     }
   }
 
@@ -579,7 +607,7 @@
      quota error wait a minute and try once more. Without it the station series is still usable. */
   async function withModel(st, raw, live) {
     if (!st) return null;
-    const get = () => Wd.fetchModelAt(raw.model, st.meta.lat, st.meta.lon, st.meta.y0, st.meta.y1);
+    const get = () => Wd.fetchModelAt(raw.model, st.meta.lat, st.meta.lon, st.meta.win);
     try {
       st.mod = await get();
     } catch (e) {
@@ -617,7 +645,7 @@
     state.windStationPending = true;
     state.windTower = null;
     renderWind();
-    const st = await Wd.findStation(state.site.lat, state.site.lon, state.period, id, { live }).catch(() => null);
+    const st = await Wd.findStation(state.site.lat, state.site.lon, state.windPeriod, id, { live }).catch(() => null);
     if (!live()) return;
     if (!st) U.toast(`No usable data at ${id} for this period.`);
     const withMod = st ? await withModel(st, state.windSets.model, live) : null;
@@ -635,7 +663,7 @@
     state.windRaw = sets[key];
     state.windAll = Object.fromEntries(Object.entries(sets).map(([k, r]) => [k, Wd.analyze(r, state.thr)]));
     state.wind = state.windAll[key];
-    state.windCompare = state.windStation && state.windStation.mod ? Wd.compare(state.windStation, state.thr) : null;
+    state.windCompare = state.windStation && state.windStation.mod ? Wd.compare(state.windStation, state.thr, sets.model.period) : null;
   }
 
   async function reverseGeocode(lat, lon) {
@@ -727,8 +755,9 @@
 
   function cFactor() {
     if (state.soil && state.soil.cFactor) return { C: state.soil.cFactor, src: "NRCS (SSURGO climate-factor area)" };
-    if (state.wind && !state.wind.error) {
-      // local estimate from reanalysis: scale FAO monthly-sum C to Chepil-type C (rough), kept within the published Texas range
+    if (state.wind && !state.wind.error && state.wind.annualized) {
+      // local estimate from reanalysis: scale FAO monthly-sum C to Chepil-type C (rough), kept within the published Texas range;
+      // it needs all 12 months, so a custom range shorter than a year gives no estimate
       return { C: Math.round(Math.min(150, state.wind.faoC * 0.9)), src: "estimated from reanalysis wind" };
     }
     return null;
@@ -741,8 +770,8 @@
     const E = (surf.wei * cf.C) / 100;
     const T = state.soil.dominant ? num(state.soil.dominant.tfact) : null;
     const EI = T ? E / T : null;
-    const Er = Math.round(E); // classify what the headline shows, so the number and the lit class agree at the edges
-    const level = Er < 10 ? 1 : Er < 40 ? 2 : Er < 80 ? 3 : Er < 150 ? 4 : 5;
+    // the exact E (t/ac/yr) against the class edges, in every unit; the headline's number follows it (UN.fmtCls)
+    const level = 1 + UN.cls("soilLoss", E);
     const frac = level + Math.min(0.49, Math.max(-0.49,
       level === 1 ? E / 10 - 0.5 : level === 2 ? (E - 10) / 30 - 0.5 : level === 3 ? (E - 40) / 40 - 0.5 : level === 4 ? (E - 80) / 70 - 0.5 : (E - 150) / 150 - 0.5));
     return { E, EI, T, level, frac, C: cf.C, cSrc: cf.src, I: surf.wei, weg: surf.weg };
@@ -750,15 +779,17 @@
   WG.riskModel = riskModel;
 
   const LEVEL_NAME = ["", "Low", "Moderate", "High", "Very high", "Extreme"];
-  const LEVEL_RANGE = ["", "< 10", "10–40", "40–80", "80–150", "≥ 150"];
+  const LEVEL_EDGES = UN.Q.soilLoss.edges; // t/ac/yr, the app's classes; shown in the chosen soil-loss unit
+  const levelRange = i => { const e = LEVEL_EDGES.map(v => UN.edge("soilLoss", v));
+    return ["", `< ${e[0]}`, `${e[0]}–${e[1]}`, `${e[1]}–${e[2]}`, `${e[2]}–${e[3]}`, `≥ ${e[3]}`][i]; };
   const LEVEL_COLOR = ["", "#3f9a66", "#9bbf55", "#efc24a", "#ef8a3c", "#d8402f"]; // the gauge's colours
-  const C_RANGE = LAYERS.stats && LAYERS.stats.C_range ? LAYERS.stats.C_range.map(v => fmt(v, 0)).join("–") : null;
 
   /* The five classes under the headline, with this site's class lit, so the number has a scale. */
   function renderRiskScale(level) {
     const tx = (LAYERS.stats && LAYERS.stats.E_pct_by_class) || [];
     $("#riskScale").innerHTML = LEVEL_NAME.slice(1).map((n, i) =>
-      `<div role="listitem" class="${i + 1 === level ? "on" : ""}"${i + 1 === level ? ' aria-current="true"' : ""} style="--c:${LEVEL_COLOR[i + 1]}" title="${n}: ${LEVEL_RANGE[i + 1]} t/ac/yr${tx[i] !== undefined ? ` · ${fmt(tx[i], 0)}% of rated Texas land` : ""}"><b>${n}</b><span>${LEVEL_RANGE[i + 1]}</span></div>`).join("");
+      `<div role="listitem" class="${i + 1 === level ? "on" : ""}"${i + 1 === level ? ' aria-current="true"' : ""} style="--c:${LEVEL_COLOR[i + 1]}" title="${n}: ${levelRange(i + 1)} ${UN.sym("soilLoss")}${tx[i] !== undefined ? ` · ${fmt(tx[i], 0)}% of rated Texas land` : ""}"><b>${n}</b><span>${levelRange(i + 1)}</span></div>`).join("");
+    $("#riskScale").setAttribute("aria-label", `Risk classes, ${UN.sym("soilLoss")}`);
   }
 
   function renderRisk() {
@@ -773,6 +804,7 @@
         Ch.gauge($("#riskGauge"), null);
         renderRiskScale(0);
         $("#riskUnit").textContent = "";
+        $("#riskFacts").innerHTML = "";
         $("#riskLevel").textContent = noGroup ? "No erodibility group" : "Soil data unavailable";
         $("#riskText").textContent = state.soil.error ? `Soil survey request failed (${state.soil.error}). Try again or enter your soil test on the Soil tab.`
           : !noGroup ? "No soil survey component with texture data here (water, urban or rock?). Enter your soil test on the Soil tab."
@@ -783,27 +815,30 @@
         Ch.gauge($("#riskGauge"), null);
         renderRiskScale(0);
         $("#riskUnit").textContent = "";
+        $("#riskFacts").innerHTML = "";
         $("#riskLevel").textContent = state.wind ? "Climatic factor unavailable" : "Analyzing…";
-        $("#riskText").textContent = state.wind ? "NRCS gives no climatic factor C for this map unit, and the wind history could not be used to estimate one."
-          : `Fetching ${state.period} years of hourly wind for this point…`;
+        $("#riskText").textContent = state.wind ? (state.wind.annualized === false ? "NRCS gives no climatic factor C for this map unit, and estimating one needs a period that covers all 12 months."
+          : "NRCS gives no climatic factor C for this map unit, and the wind history could not be used to estimate one.")
+          : `Fetching hourly wind for ${periodLabel()}…`;
       }
       return;
     }
     rc.className = `risk-card r${r.level}`;
-    $("#riskLevel").textContent = `${LEVEL_NAME[r.level]} · ${fmt(r.E, 0)} t/ac/yr`;
+    $("#riskLevel").textContent = `${LEVEL_NAME[r.level]} · ${UN.fmtCls("soilLoss", r.E, 0)}`;
     Ch.gauge($("#riskGauge"), r.frac);
     renderRiskScale(r.level);
-    $("#riskUnit").textContent = `Tons of soil per acre per year that bare, smooth, unsheltered ground here could lose: an amount, not a score out of 100. `
-      + (r.T ? `For scale, NRCS rates this soil's tolerable loss (T) at ${fmt(r.T, 0)} t/ac/yr.` : "For scale, NRCS tolerable losses (T) are 1–5 t/ac/yr.");
     const peak = w && !w.error && w.riskMonths.length ? monthsText(w.riskMonths) : null;
-    const est = !r.cSrc.startsWith("NRCS");
-    const ei = !r.EI ? "" : est ? ` Erodibility index C·I/T ≈ ${fmt(r.EI, 1)} with the estimated C; the NRCS test for highly erodible land (8 or more) uses NRCS's own C.`
-      : r.EI >= 8 ? ` Erodibility index C·I/T = ${fmt(r.EI, 1)}: meets the NRCS wind test for highly erodible land (8 or more) with these inputs; official determinations use NRCS's 1990 factors.`
-        : ` Erodibility index C·I/T = ${fmt(r.EI, 1)}; the NRCS wind test for highly erodible land starts at 8.`;
-    $("#riskText").innerHTML = `E = I × C / 100: soil erodibility I = ${fmt(r.I, 0)} t/ac/yr (range 0–310) × climatic factor C ${est ? "≈" : "="} ${fmt(r.C, 0)}`
-      + ` (${est ? "estimated; " : ""}Garden City, KS = 100${C_RANGE ? `; Texas ${C_RANGE}` : ""}).${esc(ei)}`
-      + (peak ? ` Highest-risk window: <b>${esc(peak)}</b>.` : "")
-      + ` Cover, residue, roughness and barriers can cut this by 80–99%.`;
+    const est = !r.cSrc.startsWith("NRCS"), tDp = UN.sym("soilLoss") === "t/ha/yr" ? 1 : 0;
+    $("#riskFacts").innerHTML = facts([
+      ["Soil erodibility I", UN.fmt("soilLoss", r.I, 0), `WEG ${r.weg || "—"} (1 most, 8 least erodible)`],
+      ["Climatic factor C", `${est ? "≈ " : ""}${fmt(r.C, 0)}`, `${est ? "estimated · " : "NRCS · "}Garden City, KS = 100`],
+      ["E = I × C ÷ 100", UN.fmtCls("soilLoss", r.E, 0), "bare, smooth, unsheltered ground"],
+      r.T ? ["Tolerable loss T", UN.fmt("soilLoss", r.T, tDp), "NRCS rating for this soil"] : null,
+      r.EI ? ["Erodibility index C·I/T", `${est ? "≈ " : ""}${fmt(r.EI, 1)}`, r.EI >= 8 ? "highly erodible land (8 or more)" : "highly erodible land starts at 8"] : null,
+      peak ? ["Highest-risk months", peak, ""] : null,
+    ]);
+    $("#riskUnit").textContent = "Cover, residue, roughness and barriers can cut this by 80–99%.";
+    $("#riskText").textContent = "";
   }
 
   function monthsText(idx) {
@@ -817,98 +852,113 @@
   }
   WG.monthsText = monthsText;
 
-  function speedTxt(ms, d = 1) { return state.units === "mph" ? `${fmt(U.msToMph(ms), d)} <small>mph</small>` : `${fmt(ms, d)} <small>m/s</small>`; }
+  const speedTxt = (ms, d) => UN.html("wind", ms, d);
+  // erosive threshold as a label: one decimal in m/s and kn, whole numbers in mph and km/h
+  const thrTxt = v => UN.fmt("wind", v, ["m/s", "kn"].includes(UN.sym("wind")) ? 1 : 0);
 
   function renderStats() {
-    const w = state.wind, s = state.soil;
-    const surf = currentSurface();
+    const w = state.wind;
     if (w && !w.error) {
       const share = w.eroHours / 87.6; // % of the 8,760 hours in a year
-      $("#stWind").innerHTML = speedTxt(w.meanSpeed);
-      $("#stWindS").textContent = `10 m height, ${w.start}–${w.end} average`;
-      $("#stHours").innerHTML = `${fmt(w.eroHours, 0)} <small>h ≥ ${state.units === "mph" ? fmt(U.msToMph(w.thr), 0) + " mph" : w.thr + " m/s"}</small>`;
-      $("#stHoursS").textContent = `${fmt(share, share < 10 ? 1 : 0)}% of the 8,760 hours in a year`;
-      $("#stDir").innerHTML = `${U.compass(w.prevailing)} <small>from ${fmt(w.prevailing, 0)}°</small>`;
-      $("#stDirS").textContent = "where most soil-moving wind comes from";
-      $("#monthStrip").innerHTML = w.months.map((m, i) => `<div class="m ${m.level}" title="${U.MONTHS_LONG[i]}: ${(m.share * 100).toFixed(0)}% of annual risk"><i></i>${U.MONTHS[i][0]}</div>`).join("");
       const stn = state.windStation && state.windStation.meta, ap = airportMeta();
-      const via = state.windKey === "cal" ? ` Wind calibrated to ${stn.name.replace(/,.*$/, "")} (${stn.id}) ${stn.tower ? "mesonet tower" : "airport"} records.`
-        : state.windKey === "station" ? ` From ${ap.id} airport records.` : state.windStationPending ? " Calibrating to the nearest airport…" : " Uncalibrated reanalysis.";
-      $("#monthStripNote").textContent = (w.riskMonths.length
-        ? `High-risk: ${monthsText(w.riskMonths)}. Red months carry ≥ 10% of the year's erosive wind energy under dry conditions — keep the soil covered or rough then.`
-        : "Erosive wind is spread evenly across the year here.") + via;
-    } else if (w && w.error) {
-      ["stWind", "stHours", "stDir"].forEach(id => { $("#" + id).textContent = "n/a"; $("#" + id + "S").textContent = ""; });
-      $("#monthStrip").innerHTML = `<p class="fine" style="grid-column:1/-1">Wind history unavailable: ${esc(w.error)}</p>`;
-    }
-    if (surf) {
-      $("#stWeg").innerHTML = surf.weg ? `${esc(surf.weg)} <small>· I = ${fmt(surf.wei, 0)} t/ac/yr</small>` : "—";
-      $("#stWegS").innerHTML = surf.weg ? `${wegStrip(surf.weg)}<span class="weg-ends"><span>1 most erodible</span><span>8 not erodible</span></span>`
-        + "I ranges from 0 to 310 t/ac/yr" : "no group for this soil";
-    } else if (s) { $("#stWeg").textContent = "n/a"; $("#stWegS").textContent = ""; }
-    const cf = cFactor();
-    if (cf) {
-      $("#stC").innerHTML = `${fmt(cf.C, 0)} <small>${cf.src.startsWith("NRCS") ? "NRCS" : "est."}</small>`;
-      $("#stCS").textContent = `% of Garden City, KS (= 100)${C_RANGE ? `; Texas ${C_RANGE}` : ""}`;
-    } else if (s && w) { $("#stC").textContent = "—"; $("#stCS").textContent = ""; }
-    if (state.nlcd) {
-      $("#stLc").textContent = state.nlcd.name || "n/a";
-      $("#stLcS").textContent = { nlcd: "NLCD 2021, 30 m", io: "Sentinel-2 land cover, 10 m" }[state.nlcd.src] || "land-cover services did not answer";
+      const src = state.windKey === "cal" ? [`calibrated to ${stn.id}`, `${(MODEL[w.model] || MODEL.merra2).short} + ${stn.tower ? "mesonet tower" : "airport"}`]
+        : state.windKey === "station" ? [`${ap.id} airport`, "measured"] : [state.windStationPending ? "calibrating…" : "reanalysis only", (MODEL[w.model] || MODEL.merra2).short];
+      $("#glance").innerHTML = facts([
+        ["Mean wind (10 m)", UN.fmt("wind", w.meanSpeed, UN.sym("wind") === "km/h" ? 0 : 1), w.period ? w.period.label : periodLabel()],
+        w.annualized ? ["Erosive wind", `${fmt(w.eroHours, 0)} h/yr`, `${fmt(share, share < 10 ? 1 : 0)}% of hours ≥ ${thrTxt(w.thr)}`]
+          : ["Erosive wind", `${fmt(w.eroHours, 0)} h`, `in the months covered, per year, ≥ ${thrTxt(w.thr)}`],
+        w.prevailing === null ? ["Prevailing erosive wind", "none", `no wind ≥ ${thrTxt(w.thr)} in this period`]
+          : ["Prevailing erosive wind", `${U.compass(w.prevailing)}, from ${fmt(w.prevailing, 0)}°`, w.rdd === null ? "" : `soil moves toward ${U.compass(w.rdd)}`],
+        ["Wind data", src[0], src[1]],
+        ["Land cover", state.nlcd ? state.nlcd.name || "n/a" : "…", state.nlcd ? { nlcd: "NLCD 2021, 30 m", io: "Sentinel-2, 10 m" }[state.nlcd.src] || "" : ""],
+      ]);
+      // the months are ranked by their share of the year only when the period covers all 12
+      $("#monthStrip").innerHTML = w.months.map((m, i) => `<div class="m ${m.level}" title="${U.MONTHS_LONG[i]}: ${m.valid ? `${(m.share * 100).toFixed(0)}% of ${w.annualized ? "annual" : "the covered months'"} risk` : "no data in this period"}"><i></i>${U.MONTHS[i][0]}</div>`).join("");
+      $("#monthStripNote").textContent = !w.annualized
+        ? `Months covered: ${monthsText(w.months.flatMap((m, i) => (m.valid ? [i] : [])))}. Months are ranked (red: 10% or more of the year's erosive wind energy, in dry conditions) only when the period covers all 12.`
+        : w.riskMonths.length ? `High-risk: ${monthsText(w.riskMonths)}. Red: 10% or more of the year's erosive wind energy, in dry conditions.`
+          : "Erosive wind is spread evenly across the year here.";
+    } else if (w && w.error) { // the series failed to load, or has no usable month in the period: a message, no numbers
+      const what = w.insufficient ? "Not enough wind data" : "Wind history unavailable";
+      $("#glance").innerHTML = facts([["Wind history", w.insufficient ? "not enough data" : "unavailable", w.error], ["Land cover", state.nlcd ? state.nlcd.name || "n/a" : "…", ""]]);
+      $("#monthStrip").innerHTML = `<p class="fine" style="grid-column:1/-1">${what}: ${esc(w.error)}</p>`;
+      $("#monthStripNote").textContent = w.insufficient ? "Each month is summarised from 20 or more days of hourly wind." : "";
     }
   }
 
-  /* 1 2 3 4 4L 5 6 7 8 with this soil's group lit: the WEG scale in one line. */
-  const wegStrip = g => `<span class="weg-strip" aria-hidden="true">${S.WEG_INFO.map(w => `<i class="${w.g === g ? "on" : ""}">${w.g}</i>`).join("")}</span>`;
+  /* rows [label, value, note] as aligned columns (null rows are skipped) */
+  const facts = rows => rows.filter(Boolean).map(([k, v, n]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span><span class="n">${esc(n || "")}</span>`).join("");
+
 
   /* ============ WIND TAB ============ */
   function renderWind() {
     const w = state.wind;
     if (!w) return;
-    if (w.error) {
-      $("#windSource").textContent = "Wind history could not be loaded: " + w.error;
-      return;
+    $("#thrVal").textContent = thrTxt(state.thr);
+    const sets = state.windSets || {};
+    if (sets.model) { // the selectors follow the series loaded, also when the one shown has too little data
+      $("#modelSel").value = sets.model.model || state.gridModel;
+      const sel = $("#srcSel");
+      [...sel.options].forEach(o => { o.disabled = !sets[o.value]; });
+      sel.value = state.windKey;
     }
-    $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
+    if (w.error) return blankWind(w);
     const stn = state.windStation && state.windStation.meta, ap = airportMeta();
     const key = state.windKey;
     const mShort = (MODEL[w.model] || MODEL.merra2).short;
     const busy = state.windTower ? ` · reading ${state.windTower.id} tower…` : state.windStationPending && state.windStationChoice ? ` · loading ${state.windStationChoice}…` : "";
-    $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${w.start}–${w.end}${busy}`
-      : key === "station" ? `${ap.id} station · ${w.start}–${w.end}${busy}`
-        : state.windStationRetry ? `${mShort} · data limit, retrying in 1 min` : state.windStationPending ? `${mShort} · calibrating…` : `${mShort} · ${w.start}–${w.end}`;
+    const yl = w.period ? w.period.label : periodLabel(); // the analysis' own dates, never those of a load still running
+    $("#windSrcTag").textContent = key === "cal" ? `calibrated to ${stn.id} · ${yl}${busy}`
+      : key === "station" ? `${ap.id} station · ${yl}${busy}`
+        : state.windStationRetry ? `${mShort} · data limit, retrying in 1 min` : state.windStationPending ? `${mShort} · calibrating…` : `${mShort} · ${yl}`;
     $("#moistTag").textContent = { gridmet: "gridMET 4 km", "nasa-power": "NASA POWER (fallback)", "open-meteo": "Open-Meteo (fallback)" }[(w.moisture || {}).source] || "";
-    $("#modelSel").value = (state.windSets.model || {}).model || state.gridModel;
-    const sel = $("#srcSel");
-    const sets = state.windSets || {};
-    [...sel.options].forEach(o => { o.disabled = !sets[o.value]; });
-    sel.value = key;
+    // colours rank the months only over a whole year
+    $("#seasonLegend").innerHTML = w.annualized ? '<span><i class="sw red"></i>High-risk month</span><span><i class="sw amber"></i>Elevated</span><span><i class="sw gray"></i>Lower</span><span><i class="sw line"></i>Mean wind speed</span>'
+      : '<span><i class="sw gray"></i>Month covered (not ranked)</span><span><i class="sw line"></i>Mean wind speed</span>';
+    $("#seasonNote").textContent = w.annualized ? "Bars: average hours per year with wind above the erosive threshold. Color weighs wind energy above threshold by dryness (1 − precip/ET₀)."
+      : "Bars: average hours per year with wind above the erosive threshold, in the months covered. Colors rank the months by their share of the year's risk only when the period covers all 12 months.";
     if (!$("#tab-wind").hidden) renderWindCharts();
     renderCalibration();
-    const yrs = `${w.start}–${w.end}`;
-    const t = w.trend;
+    const t = w.trend, partial = w.annual.some(a => !a.complete);
     $("#trendTag").textContent = t ? `${t.slope >= 0 ? "+" : ""}${fmt(t.slope * 10, 0)} h/decade` : "";
-    $("#trendNote").textContent = t
-      ? `Erosive-wind hours per year, ${yrs}. Linear trend ${t.slope >= 0 ? "+" : ""}${fmt(t.slope * 10, 0)} hours per decade (${t.significant ? "statistically significant at 95%" : "not statistically significant"} over ${w.annual.length} years). Red bars: ≥ 15% above average; gray: ≥ 15% below.`
-      : "";
-    const fmtS = v => state.units === "mph" ? `${fmt(U.msToMph(v), 1)} mph` : `${fmt(v, 1)} m/s`;
-    const dpClass = w.dp === null ? "" : w.dp < 200 ? "low energy" : w.dp < 400 ? "intermediate" : "high energy";
+    $("#trendNote").textContent = (t
+      ? `Erosive-wind hours per year, ${yl}. Linear trend ${t.slope >= 0 ? "+" : ""}${fmt(t.slope * 10, 0)} hours per decade (${t.significant ? "statistically significant at 95%" : "not statistically significant"} over ${w.completeYears} complete years). Red bars: ≥ 15% above average; gray: ≥ 15% below.`
+      : `Erosive-wind hours per year, ${yl}. A trend needs 5 or more complete calendar years (this period has ${w.completeYears}).`)
+      + (partial ? " Pale bars are partial years, scaled to a year and left out of the trend." : "");
+    const fmtS = v => UN.fmt("wind", v, UN.sym("wind") === "km/h" ? 0 : 1), pr = v => UN.fmt("precip", v, UN.sym("precip") === "in" ? 1 : 0);
+    const dpClass = w.dp < 200 ? "low energy" : w.dp < 400 ? "intermediate" : "high energy", rr = w.rdp / Math.max(w.dp, 1e-9);
+    const none = `none: no wind ≥ ${thrTxt(w.thr)} in this period`; // no erosive wind, so no direction
     $("#windIdx").innerHTML = [
       ["Mean wind speed (10 m)", fmtS(w.meanSpeed)],
-      ["Erosive-wind hours per year", `${fmt(w.eroHours, 0)} h (${fmt(w.eroHours / 87.6, 1)}% of time)`],
-      ["Days per year with gusts ≥ 40 mph", w.gustDays !== null ? fmt(w.gustDays, 0)
+      [w.annualized ? "Erosive-wind hours per year" : "Erosive-wind hours in the months covered (per year)", `${fmt(w.eroHours, 0)} h${w.annualized ? ` (${fmt(w.eroHours / 87.6, 1)}% of time)` : ""}`],
+      [`Days ${w.annualized ? "per year" : "in the months covered, per year,"} with gusts ≥ ${thrTxt(17.9)}`, w.gustDays !== null ? fmt(w.gustDays, 0)
         : key === "cal" ? "n/a (the tower records no gusts and no airport could supply them)" : "n/a (MERRA-2 has no gusts)"],
-      ["Prevailing erosive wind (from)", `${U.compass(w.prevailing)} (${fmt(w.prevailing, 0)}°)`],
-      ["Resultant soil-transport direction (toward)", `${U.compass(w.rdd)} (${fmt(w.rdd, 0)}°)`],
-      ["Best barrier / strip orientation", `${orientation(w)}`],
-      ...(w.dp !== null ? [
-        ["Sand drift potential DP (Fryberger & Dean)", `${fmt(w.dp, 0)} VU · ${dpClass}`],
-        ["Resultant drift RDP / direction", `${fmt(w.rdp, 0)} VU toward ${U.compass(w.rddF)}; RDP/DP ${fmt(w.rdp / Math.max(w.dp, 1e-9), 2)} (${w.rdp / Math.max(w.dp, 1e-9) < 0.3 ? "multidirectional" : w.rdp / Math.max(w.dp, 1e-9) < 0.8 ? "intermediate" : "unidirectional"})`],
-      ] : []),
-      ["FAO wind-erosion climatic index (annual)", `${fmt(w.faoC, 0)} (no fixed top; higher = windier and drier)`],
-      ["Annual precipitation / ET₀", `${fmt(w.precip / 25.4, 1)} in / ${fmt(w.et0 / 25.4, 1)} in (P/ET₀ = ${fmt(w.aridity, 2)})`],
+      ["Prevailing erosive wind (from)", w.prevailing === null ? none : `${U.compass(w.prevailing)} (${fmt(w.prevailing, 0)}°)`],
+      ["Resultant soil-transport direction (toward)", w.rdd === null ? none : `${U.compass(w.rdd)} (${fmt(w.rdd, 0)}°)`],
+      ["Best barrier / strip orientation", w.prevailing === null ? "no erosive wind to set it by" : orientation(w)],
+      ["Sand drift potential DP (Fryberger & Dean)", `${fmt(w.dp, 0)} VU · ${dpClass}`],
+      ...(w.rddF !== null ? [["Resultant drift RDP / direction", `${fmt(w.rdp, 0)} VU toward ${U.compass(w.rddF)}; RDP/DP ${fmt(rr, 2)} (${rr < 0.3 ? "multidirectional" : rr < 0.8 ? "intermediate" : "unidirectional"})`]] : []),
+      ...(w.annualized ? [["FAO wind-erosion climatic index (annual)", `${fmt(w.faoC, 0)} (no fixed top; higher = windier and drier)`]] : []),
+      [w.annualized ? "Annual precipitation / ET₀" : "Precipitation / ET₀, months covered", `${pr(w.precip)} / ${pr(w.et0)} (P/ET₀ = ${fmt(w.aridity, 2)})`],
     ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("")
       + `<span class="d">${esc(sourceCaveat())}</span>`;
-    $("#windSource").innerHTML = `Source: ${windSourceText()} ${yrs}. <button class="link" data-methods="m-site">All sources and equations →</button>`;
+    $("#windSource").innerHTML = `Source: ${windSourceText()} ${esc(yl)}. <button class="link" data-methods="m-site">All sources and equations →</button>`;
+  }
+
+  /* The Wind tab without numbers: the series failed to load, or has no usable month in the period. */
+  function blankWind(w) {
+    const why = w.insufficient ? `Not enough wind data: ${w.error}. Each month is summarised from 20 or more days of hourly wind.`
+      : `Wind history could not be loaded: ${w.error}`;
+    $("#windSrcTag").textContent = w.insufficient ? "not enough data" : "unavailable";
+    $("#moistTag").textContent = "";
+    $("#windIdx").innerHTML = `<span class="d">${esc(why)}</span>`;
+    $("#roseBox").innerHTML = "";
+    $("#roseNote").textContent = "";
+    $("#trendTag").textContent = "";
+    $("#trendNote").textContent = "";
+    $("#calCard").hidden = true;
+    $("#windSource").textContent = why;
+    Ch.clear();
   }
 
   /* ---- provenance: what supplied each piece of data for this site ---- */
@@ -933,7 +983,7 @@
   // the airport behind "Airport station only" (the calibration station if no airport is recorded)
   const airportMeta = () => (state.windAirport || state.windStation || {}).meta;
   // "Lubbock Intl Airport, TX (LBB, 21 km away, 99% of hours)"; towers add their years and network
-  const stationTxt = s => `${esc(s.name)} (${s.id}, ${fmt(s.km, 0)} km away, ${fmt(s.coverage * 100, 0)}% of hours${s.tower ? ` ${s.y0}–${s.y1}` : ""})`
+  const stationTxt = s => `${esc(s.name)} (${s.id}, ${UN.fmt("distance", s.km)} away, ${fmt(s.coverage * 100, 0)}% of hours${s.tower ? ` ${s.y0}–${s.y1}` : ""})`
     + `${s.tower ? `, a ${WTM} 10 m tower (Texas Tech),` : ""} from ${OBS[s.obsSource]}`;
 
   function windSourceText() {
@@ -945,7 +995,7 @@
     const moist = `Precipitation, grass reference ET₀ and temperature: ${MOIST[model.moisture.source]}.`;
     if (key === "cal") {
       const g = state.windRaw.gustStation;
-      const gust = !stn.tower ? "" : g ? `; daily gusts calibrated to ${esc(g.name)} (${g.id}, ${fmt(g.km, 0)} km away), because the tower records no gusts` : "; no gusts (the tower records none and no airport could supply them)";
+      const gust = !stn.tower ? "" : g ? `; daily gusts calibrated to ${esc(g.name)} (${g.id}, ${UN.fmt("distance", g.km)} away), because the tower records no gusts` : "; no gusts (the tower records none and no airport could supply them)";
       return `hourly 10 m wind from ${grid}, calibrated month by month (quantile mapping) to hourly observations at ${stationTxt(stn)}${gust}. ${moist}`;
     }
     if (key === "station") return `hourly airport observations (2-minute mean wind at 10 m) at ${stationTxt(ap)}. ${moist}`;
@@ -961,17 +1011,17 @@
       const M = MODEL[model.model];
       rows.push(["Hourly wind (gridded)", `${M.name}, cell ${fmt(model.lat, 3)}, ${fmt(model.lon, 3)}`, M.via + (model.fellBack ? "; automatic fallback" : "")]);
       const ap = state.windAirport && state.windAirport.meta, tw = stn && stn.tower ? stn : null;
-      rows.push(["Airport observations", ap ? `${esc(ap.name)} (${ap.id}), ${fmt(ap.km, 0)} km, ${fmt(ap.coverage * 100, 0)}% of hours` : state.windStationPending ? "loading…" : "none within 150 km", ap ? OBS[ap.obsSource] : ""]);
-      if (tw || state.windTower) rows.push(["West Texas Mesonet tower", tw ? `${esc(tw.name)} (${tw.id}), ${fmt(tw.km, 0)} km, ${fmt(tw.coverage * 100, 0)}% of hours ${tw.y0}–${tw.y1}; ${checkTxt(tw)}` : "loading…",
+      rows.push(["Airport observations", ap ? `${esc(ap.name)} (${ap.id}), ${UN.fmt("distance", ap.km)}, ${fmt(ap.coverage * 100, 0)}% of hours` : state.windStationPending ? "loading…" : `none within ${UN.fmt("distance", 150)}`, ap ? OBS[ap.obsSource] : ""]);
+      if (tw || state.windTower) rows.push(["West Texas Mesonet tower", tw ? `${esc(tw.name)} (${tw.id}), ${UN.fmt("distance", tw.km)}, ${fmt(tw.coverage * 100, 0)}% of hours ${tw.y0}–${tw.y1}; ${checkTxt(tw)}` : "loading…",
         tw ? `${OBS[tw.obsSource]}; ${WTM} data policy: public use needs the mesonet's permission` : ""]);
       const skipped = state.windSkipped.filter(s => !stn || s.id !== stn.id), g = (state.windSets.cal || {}).gustStation;
-      if (skipped.length) rows.push(["Towers not used", skipped.map(s => `${esc(s.name)} (${s.id}), ${fmt(s.km, 0)} km: ${skipTxt(s)}`).join("; "), "exposure check"]);
+      if (skipped.length) rows.push(["Towers not used", skipped.map(s => `${esc(s.name)} (${s.id}), ${UN.fmt("distance", s.km)}: ${skipTxt(s)}`).join("; "), "exposure check"]);
       rows.push(["Wind used for results", { cal: tw ? (g ? `Calibrated to the tower (gusts to ${g.id})` : "Calibrated to the tower (no gusts)") : "Calibrated to the airport", station: "Airport station only", model: "Gridded model only" }[state.windKey] || "—", ""]);
       rows.push(["Precipitation, ET₀, temperature", `${{ gridmet: "gridMET 4 km", "open-meteo": "ECMWF IFS/ERA5", "nasa-power": "NASA POWER MERRA-2" }[model.moisture.source]}, cell ${fmt(model.moisture.lat, 3)}, ${fmt(model.moisture.lon, 3)}`, MOIST[model.moisture.source]]);
     }
     if (s && !s.error) rows.push(["Soil profile, WEG, I, T", `SSURGO map unit ${esc(String(s.mukey))}${s.dominant ? `, ${esc(s.dominant.compname)}` : ""} (${esc(s.mapunit.areasymbol || "")})`, `USDA-NRCS ${A("https://sdmdataaccess.nrcs.usda.gov/", "Soil Data Access")} (direct)`]);
     if (cf) rows.push(["Climatic factor C", `${fmt(cf.C, 0)}`, cf.src.startsWith("NRCS") ? "NRCS climate-factor area in SSURGO (direct)" : "estimated from the wind series"]);
-    if (e) rows.push(["Elevation and slope", `${fmt(e.z, 0)} m, ${fmt(e.slope, 1)}% slope`, e.src.startsWith("USGS") ? `${e.src}, ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")} (direct)` : `${e.src} via Open-Meteo (USGS did not respond)`]);
+    if (e) rows.push(["Elevation and slope", `${UN.fmt("elev", e.z)}, ${fmt(e.slope, 1)}% slope`, e.src.startsWith("USGS") ? `${e.src}, ${A("https://apps.nationalmap.gov/epqs/", "Elevation Point Query Service")} (direct)` : `${e.src} via Open-Meteo (USGS did not respond)`]);
     if (state.nlcd) rows.push(["Land cover", state.nlcd.name || "no answer", state.nlcd.src === "nlcd" ? `NLCD 2021, ${A("https://www.mrlc.gov/", "MRLC")} WMS (direct)`
       : state.nlcd.src === "io" ? `Sentinel-2 10 m land cover, ${A("https://livingatlas.arcgis.com/landcover/", "Impact Observatory, Microsoft, Esri")} (NLCD server refuses browser requests)`
         : "neither NLCD nor the Sentinel-2 land-cover service answered"]);
@@ -987,11 +1037,11 @@
         : x.ero < Wd.EXPOSURE_MIN ? "This tower reads low against the airport and may be sheltered, so these values may be low."
           : "The tower reads like the airport, on open ground, so sheltered sites blow less.";
     if (state.windKey === "cal") return `Speeds follow the measured distribution at ${stn.id} for each month; timing and direction come from the reanalysis at this point. ${ground}`;
-    if (state.windKey === "station") return `Measured at the ${ap.id} airport, ${fmt(ap.km, 0)} km away; local terrain and surface can differ from this field.`;
+    if (state.windKey === "station") return `Measured at the ${ap.id} airport, ${UN.fmt("distance", ap.km)} away; local terrain and surface can differ from this field.`;
     if (state.windStationPending) return "Calibrating to the nearest airport station…";
     const merra = state.windSets && state.windSets.model && state.windSets.model.model === "merra2";
     return (merra ? "Uncalibrated MERRA-2: at Lubbock it caught ~58% of the airport's erosive hours." : "Uncalibrated ECMWF: at Lubbock and Midland it caught only ~35–45% of erosive hours and shifted the peak months earlier.")
-      + (state.windStation ? "" : " No airport station with enough data within 150 km.");
+      + (state.windStation ? "" : ` No airport station with enough data within ${UN.fmt("distance", 150)}.`);
   }
 
   function renderCalibration() {
@@ -1006,24 +1056,25 @@
     card.hidden = false;
     const m = st.meta, ap = state.windAirport && state.windAirport.meta, g = (state.windSets.cal || {}).gustStation;
     const skipped = state.windSkipped.filter(s => s.id !== m.id); // a skipped tower the user then picked is the station
-    const cands = Wd.nearestStations(state.site.lat, state.site.lon, state.period);
+    const cands = Wd.nearestStations(state.site.lat, state.site.lon, state.windPeriod);
     const want = state.windStationPending && state.windStationChoice ? cands.find(c => c.id === state.windStationChoice) : null; // picked, still loading
-    $("#stnSel").innerHTML = cands.map(c => `<option value="${esc(c.id)}" ${c.id === (want || m).id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name.replace(/,.*$/, ""))} · ${fmt(c.km, 0)} km${c.awos ? " · AWOS" : c.tower ? " · mesonet tower" : ""}</option>`).join("");
-    const sp = v => state.units === "mph" ? `${fmt(U.msToMph(v), 1)} mph` : `${fmt(v, 2)} m/s`;
-    const tm = a => a ? WG.monthsText(a.riskMonths) || "—" : "—";
+    $("#stnSel").innerHTML = cands.map(c => `<option value="${esc(c.id)}" ${c.id === (want || m).id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name.replace(/,.*$/, ""))} · ${UN.fmt("distance", c.km)}${c.awos ? " · AWOS" : c.tower ? " · mesonet tower" : ""}</option>`).join("");
+    const sp = v => UN.fmt("wind", v, UN.sym("wind") === "m/s" ? 2 : 1);
+    const tm = a => (!a ? "—" : a.error ? "too little data" : !a.annualized ? "not ranked" : WG.monthsText(a.riskMonths) || "—");
     $("#calKv").innerHTML = [
       ["Station", `${m.name} (${m.id}${m.awos ? ", AWOS" : ""})${m.tower ? " · West Texas Mesonet 10 m tower" : ""}`],
-      ["Distance · data coverage", `${fmt(m.km, 0)} km · ${fmt(m.coverage * 100, 0)}% of hours${m.tower ? `, ${m.y0}–${m.y1}` : ""}`],
-      ...(m.tower ? [["Gusts", g ? `from ${g.name.replace(/,.*$/, "")} (${g.id}), ${fmt(g.km, 0)} km: the tower records none`
-        : ap ? `none: the tower records none and ${ap.id} has no model series to map them` : "none: the tower records none and no airport within 150 km has them"]] : []),
+      ["Distance · data coverage", `${UN.fmt("distance", m.km)} · ${fmt(m.coverage * 100, 0)}% of hours${m.tower ? `, ${m.y0}–${m.y1}` : ""}`],
+      ...(m.tower ? [["Gusts", g ? `from ${g.name.replace(/,.*$/, "")} (${g.id}), ${UN.fmt("distance", g.km)}: the tower records none`
+        : ap ? `none: the tower records none and ${ap.id} has no model series to map them` : `none: the tower records none and no airport within ${UN.fmt("distance", 150)} has them`]] : []),
       ...(m.tower ? [["Exposure vs airport", checkTxt(m)]] : []),
-      ...(skipped.length ? [["Towers not used", skipped.map(s => `${s.id}, ${fmt(s.km, 0)} km: ${skipTxt(s)}`).join("; ")]] : []),
-      ...(tw ? [["Mesonet tower ranked ahead", `${tw.id}, ${fmt(tw.km, 0)} km: reading its last ${Wd.TOWER_YEARS} years (about a minute)`]] : []),
-      ...(want ? [["Loading", `${want.id}, ${fmt(want.km, 0)} km${want.tower ? `: reading its last ${Wd.TOWER_YEARS} years (about a minute)` : "…"}`]] : []),
+      ...(skipped.length ? [["Towers not used", skipped.map(s => `${s.id}, ${UN.fmt("distance", s.km)}: ${skipTxt(s)}`).join("; ")]] : []),
+      ...(tw ? [["Mesonet tower ranked ahead", `${tw.id}, ${UN.fmt("distance", tw.km)}: reading its last ${Wd.TOWER_YEARS} years (about a minute)`]] : []),
+      ...(want ? [["Loading", `${want.id}, ${UN.fmt("distance", want.km)}${want.tower ? `: reading its last ${Wd.TOWER_YEARS} years (about a minute)` : "…"}`]] : []),
       ["Mean wind: station vs model", `${sp(c.meanObs)} vs ${sp(c.meanMod)} (${c.bias >= 0 ? "+" : ""}${fmt((c.bias / c.meanObs) * 100, 0)}%)`],
       ["Hourly agreement", `r = ${fmt(c.r, 2)}, RMSE ${sp(c.rmse)}`],
       ["Erosive hours caught by model", `${fmt((c.freqMod / Math.max(c.freqObs, 1e-9)) * 100, 0)}% (${fmt(c.freqMod * 100, 1)}% vs ${fmt(c.freqObs * 100, 1)}% of hours)`],
-      [`High-risk months: ${ap ? `${ap.id} airport` : "station"} / model / calibrated`, `${tm(all.station)} / ${tm(all.model)} / ${tm(all.cal)}`],
+      state.wind.annualized ? [`High-risk months: ${ap ? `${ap.id} airport` : "station"} / model / calibrated`, `${tm(all.station)} / ${tm(all.model)} / ${tm(all.cal)}`]
+        : ["High-risk months", "not ranked: the period covers part of a year"],
     ].map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join("");
     if (!$("#tab-wind").hidden) Ch.calib(all, ap && `${ap.id} airport`);
   }
@@ -1032,54 +1083,124 @@
   // "−49% erosive hours, −21% mean wind against LBB, relative to the model"
   const expTxt = s => `${pctOff(s.exposure.ero)} erosive hours, ${pctOff(s.exposure.mean)} mean wind against ${s.expAp}, relative to the model`;
   const checkTxt = s => s.exposure ? `${expTxt(s)}${s.exposure.ero < Wd.EXPOSURE_MIN ? ": reads low, probably sheltered" : ""}`
-    : s.expAp ? `not checked: could not be compared with ${s.expAp}` : "not checked: no airport within 150 km";
+    : s.expAp ? `not checked: could not be compared with ${s.expAp}` : `not checked: no airport within ${UN.fmt("distance", 150)}`;
   const skipTxt = s => s.exposure ? `${expTxt(s)} (probably sheltered)` : `could not be compared with ${s.expAp}`;
 
   function orientation(w) {
-    // barriers/strips should run perpendicular to the prevailing erosive wind
+    // barriers/strips should run perpendicular to the prevailing erosive wind (callers check that there is one)
     const perp = (w.prevailing + 90) % 180;
     const a = U.compass(perp), b = U.compass(perp + 180);
-    return `${a}–${b} rows (perpendicular to ${U.compass(w.prevailing)} winds)`;
+    return `${a}–${b} rows (perpendicular to ${U.compass(w.prevailing)} winds${w.annualized ? "" : " in the months covered"})`;
   }
   WG.orientation = orientation;
 
   function renderWindCharts() {
     const w = state.wind;
     if (!w || w.error) return;
-    Ch.season(w, state.units);
-    Ch.speeds(w, state.units);
+    Ch.season(w);
+    Ch.speeds(w);
     Ch.water(w);
     Ch.trend(w);
-    Ch.rose($("#roseBox"), w, state.units);
+    Ch.rose($("#roseBox"), w);
     if (state.windAll && (state.windAll.station || state.windCompare)) Ch.calib(state.windAll, state.windAirport && `${state.windAirport.meta.id} airport`);
     const tot = w.rose.reduce((a, r) => a + r.bins.reduce((x, y) => x + y, 0), 0);
-    $("#roseNote").textContent = `Erosive winds blow ${fmt(tot, 1)}% of the time, mostly from the ${U.compass(w.prevailing)}. Soil moves toward the ${U.compass(w.rdd)}.`;
+    $("#roseNote").textContent = w.prevailing === null ? `No wind at or above ${thrTxt(w.thr)} in this period, so no erosive wind rose.`
+      : `Erosive winds blow ${fmt(tot, 1)}% of the time, mostly from the ${U.compass(w.prevailing)}.${w.rdd === null ? "" : ` Soil moves toward the ${U.compass(w.rdd)}.`}`;
   }
 
-  $("#unitSel").addEventListener("change", e => { state.units = e.target.value; renderWind(); renderStats(); });
+  $("#unitSel").addEventListener("change", e => UN.set("wind", e.target.value)); // shortcut for the wind row of the units table
   $("#thrRange").addEventListener("input", U.debounce(e => {
     state.thr = +e.target.value;
     if (state.windSets) { chooseWind(); renderWind(); renderStats(); renderRisk(); renderPractices(); }
-    $("#thrVal").textContent = state.units === "mph" ? `${fmt(U.msToMph(state.thr), 0)} mph` : `${state.thr} m/s`;
+    $("#thrVal").textContent = thrTxt(state.thr);
   }, 120));
   $("#srcSel").addEventListener("change", e => {
     state.windSource = e.target.value;
     if (state.windSets) { chooseWind(); renderWind(); renderStats(); renderRisk(); renderPractices(); }
   });
-  $("#periodSel").addEventListener("change", e => {
-    state.period = +e.target.value;
+  /* Period: presets, or custom dates within the chosen model's record (MERRA-2 from 2001, ECMWF from 1979). */
+  const otherModel = m => (m === "ecmwf" ? "merra2" : "ecmwf");
+  const recordTxt = m => { const L = Wd.limits(m); return `${MODEL[m].short} record (${Wd.dayLabel(L.first)} – ${Wd.dayLabel(L.last)})`; };
+  /* Why custom dates p ({from, to}) cannot be analysed with model m, or "". In this order: both are calendar dates (a
+     link typed by hand may hold 2024-02-30), the start comes first, the dates span 30 days or more, 30 of them are
+     inside the model's record, and 20 or more fall in one calendar month (analyze() summarises a month only from 20
+     days of hourly wind). */
+  function periodIssue(p, m) {
+    if (!p.from) return "";
+    const real = s => { const t = new Date(`${s}T00:00:00Z`); return !Number.isNaN(+t) && t.toISOString().slice(0, 10) === s; }; // any year, also 0024
+    const bad = [p.from, p.to].find(s => !real(s));
+    if (bad) return `${bad} is not a calendar date.`;
+    const n = Wd.parseDay(p.to) - Wd.parseDay(p.from) + 1, P = Wd.resolvePeriod(p, m);
+    if (n < 1) return "The start date is after the end date.";
+    if (n < 30) return `These dates cover ${n} day${n > 1 ? "s" : ""}: choose at least 30.`;
+    if (P.overlap < 30) return `${P.overlap > 0 ? `Only ${P.overlap} of these days ${P.overlap > 1 ? "are" : "is"}` : "These dates are not"} in the ${recordTxt(m)}: choose at least 30 days inside it.`;
+    if (P.monthDays < 20) return "These dates have no calendar month with 20 or more days, and a month is summarised only from 20 days of hourly wind or more: include at least 20 days of one month (for example 1–20 March).";
+    return "";
+  }
+  const movedTxt = (P, m) => `The days outside the ${recordTxt(m)} were left out: ${P.label}.`;
+  function syncPeriodUI(choosing = false) { // choosing: "Custom dates…" picked, dates not applied yet
+    const L = Wd.limits(state.gridModel), custom = !!state.period.from || choosing;
+    $("#periodSel").value = custom ? "custom" : String(state.period.n);
+    $("#periodCustom").hidden = !custom;
+    ["#periodFrom", "#periodTo"].forEach(s => { $(s).min = Wd.isoDay(L.first); $(s).max = Wd.isoDay(L.last); });
+    // applied custom dates are shown; otherwise the inputs keep what was typed, and empty ones start at the preset's dates
+    const P = state.period.from ? state.period : Wd.resolvePeriod(state.period, state.gridModel);
+    if (state.period.from || !$("#periodFrom").value) $("#periodFrom").value = P.from;
+    if (state.period.from || !$("#periodTo").value) $("#periodTo").value = P.to;
+    $("#periodLimits").textContent = `${state.gridModel === "ecmwf" ? "ECMWF" : "NASA MERRA-2"}: ${Wd.dayLabel(L.first)} – ${Wd.dayLabel(L.last)}`;
+  }
+  function reloadWind() {
     if (!state.site) return;
-    state.wind = null;
+    // the old period's series go: nothing re-analyses them or labels them with the new period while it loads
+    Object.assign(state, { wind: null, windRaw: null, windSets: null, windAll: null, windCompare: null, windStation: null, windAirport: null, windTower: null, windSkipped: [] });
     $("#windSrcTag").textContent = "loading…";
+    const { lat, lon } = state.site;
+    try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}${windQ()}${UN.query()}${KEEP_Q}`); } catch (e) { /* file:// */ }
     loadWind(state.token);
+  }
+  $("#periodSel").addEventListener("change", e => {
+    if (e.target.value === "custom") { syncPeriodUI(true); $("#periodFrom").focus(); return; }
+    if (!state.period.from && state.period.n === +e.target.value) return syncPeriodUI(); // same preset: just close the date row
+    state.period = { n: +e.target.value };
+    syncPeriodUI();
+    reloadWind();
+  });
+  $("#periodApply").addEventListener("click", () => {
+    const a = $("#periodFrom").value, b = $("#periodTo").value, m = state.gridModel, alt = otherModel(m);
+    if (!a || !b) return U.toast("Choose a start and an end date.");
+    const p = { from: a, to: b }, why = periodIssue(p, m);
+    if (why) return U.toast(why + (periodIssue(p, alt) ? "" : ` The ${recordTxt(alt)} holds them.`), 8000);
+    const P = Wd.resolvePeriod(p, m);
+    if (P.moved) U.toast(movedTxt(P, m), 5000);
+    state.period = { from: P.from, to: P.to }; // the dates analysed, which the inputs and the address then show
+    syncPeriodUI();
+    reloadWind();
   });
   $("#modelSel").addEventListener("change", e => {
-    state.gridModel = e.target.value;
-    if (!state.site) return;
-    state.wind = null;
-    $("#windSrcTag").textContent = "loading…";
-    loadWind(state.token);
+    const m = e.target.value;
+    if (state.period.from) { // custom dates: the new model must hold them
+      const P = Wd.resolvePeriod(state.period, m), why = periodIssue(state.period, m);
+      if (why) {
+        e.target.value = state.windSets ? state.windSets.model.model : state.gridModel;
+        return U.toast(`${MODEL[m].short} not chosen. ${why}`, 8000);
+      }
+      if (P.moved) { U.toast(movedTxt(P, m), 5000); state.period = { from: P.from, to: P.to }; }
+    }
+    state.gridModel = m;
+    syncPeriodUI(!$("#periodCustom").hidden);
+    reloadWind();
   });
+  // dates in a link that its model cannot serve (a link made before the model was kept in it, or typed by hand):
+  // the other model when it can, else the last 10 years
+  if (state.period.from) {
+    const m = state.gridModel, alt = otherModel(m), why = periodIssue(state.period, m);
+    if (why && !periodIssue(state.period, alt)) { state.gridModel = alt; U.toast(`The ${recordTxt(m)} cannot serve these dates, so ${MODEL[alt].short} is used.`, 6000); }
+    else if (why) { U.toast(`${why} The last 10 years are shown instead.`, 8000); state.period = { n: 10 }; }
+    const P = Wd.resolvePeriod(state.period, state.gridModel);
+    if (P.moved) state.period = { from: P.from, to: P.to };
+  }
+  $("#modelSel").value = state.gridModel;
+  syncPeriodUI();
 
   /* ============ SOIL TAB ============ */
   function renderSoil() {
@@ -1113,12 +1234,12 @@
     const others = s.components.filter(c => c.cokey !== d.cokey && c.comppct_r >= 5);
     const tex = surf ? (surf.texName || S.TEX[surf.texCode] || surf.texCode) : "—";
     const chips = [
-      surf && surf.weg ? `<span class="chip ${surf.wei >= 86 ? "warn" : surf.wei <= 38 ? "ok" : ""}" title="Wind Erodibility Group: nine classes from 1 (most erodible) to 8 (not erodible), with 4L between 4 and 5">WEG ${esc(surf.weg)} · I ${fmt(surf.wei, 0)} t/ac/yr${surf.calc ? " (from your values)" : ""}</span>` : "",
+      surf && surf.weg ? `<span class="chip ${surf.wei >= 86 ? "warn" : surf.wei <= 38 ? "ok" : ""}" title="Wind Erodibility Group: nine classes from 1 (most erodible) to 8 (not erodible), with 4L between 4 and 5">WEG ${esc(surf.weg)} · I ${esc(UN.fmt("soilLoss", surf.wei, 0))}${surf.calc ? " (from your values)" : ""}</span>` : "",
       tex ? `<span class="chip">Surface: ${esc(tex)}</span>` : "",
       site.slope !== null ? `<span class="chip">Slope ${fmt(site.slope, 1)}%</span>` : "",
       site.drainage ? `<span class="chip">${esc(site.drainage)}</span>` : "",
       site.hydgrp ? `<span class="chip">Hydrologic group ${esc(site.hydgrp)}</span>` : "",
-      site.depth ? `<span class="chip">${site.restriction ? `${esc(site.restriction.kind)} at ${fmt(site.restriction.depth, 0)} cm` : `Deep (> ${fmt(site.depth, 0)} cm)`}</span>` : "",
+      site.depth ? `<span class="chip">${site.restriction ? `${esc(site.restriction.kind)} at ${UN.fmt("depth", site.restriction.depth)}` : `Deep (> ${UN.fmt("depth", site.depth)})`}</span>` : "",
       d.eco ? `<span class="chip">${esc(d.eco.ecoclassname)}</span>` : "",
       s.mlra ? `<span class="chip">MLRA ${esc(s.mlra.sym)} · ${esc(s.mlra.name)}</span>` : "",
     ].join("");
@@ -1153,12 +1274,12 @@
     const cells = [
       ["Texture class", surf.texName || S.TEX[surf.texCode] || "—", ch(surf.texCode, base.texCode)],
       ["Wind erodibility group (1 most – 8 least)", surf.weg || "—", ch(surf.weg, base.weg)],
-      ["Erodibility index I (0–310)", surf.wei !== null ? `${fmt(surf.wei, 0)} t/ac/yr` : "—", ch(surf.wei, base.wei)],
+      [`Erodibility index I (${UN.range("soilLoss", 0, 310, 0)})`, surf.wei !== null ? UN.both("soilLoss", surf.wei, 0) : "—", ch(surf.wei, base.wei)],
       ["Organic carbon", surf.om !== null ? `${fmt(surf.om / 1.724, 2)}%` : "—", ""],
       ["Wilting point (15 bar)", sr ? `${fmt(sr.ll, 3)} cm³/cm³` : "—", ""],
       ["Field capacity (⅓ bar)", sr ? `${fmt(sr.dul, 3)} cm³/cm³` : "—", ""],
-      ["Plant-available water", sr ? `${fmt(sr.awc * 12, 2)} in/ft` : "—", ""],
-      ["Sat. conductivity", sr && sr.ksat !== null ? `${fmt(sr.ksat / 25.4, 2)} in/h` : "—", ""],
+      ["Plant-available water", sr ? UN.fmt("awc", sr.awc) : "—", ""],
+      ["Sat. conductivity", sr && sr.ksat !== null ? UN.fmt("ksat", sr.ksat / 3.6) : "—", ""], // mm/h -> µm/s base
     ];
     const rw = S.rweq(surf), rw0 = S.rweq(base);
     if (rw) cells.push(
@@ -1175,8 +1296,9 @@
     const g = surf && surf.weg;
     $("#wegTag").textContent = g ? `this soil: WEG ${g}` : "";
     const here = g ? `<span class="here">this soil${surf.texName ? `: ${esc(surf.texName)}` : ""}</span>` : "";
-    $("#wegTable").innerHTML = `<thead><tr><th>WEG</th><th class="l">Texture guide</th><th>I<small>t/ac/yr</small></th></tr></thead><tbody>`
-      + S.WEG_INFO.map(w => `<tr class="${w.g === g ? "on" : ""}"><td><b>${w.g}</b></td><td class="l"><b>${esc(w.name)}</b>${w.g === g ? ` ${here}` : ""}<span class="def">${esc(w.def)}</span></td><td>${w.I}</td></tr>`).join("")
+    const iTxt = I => String(I).replace(/\d+/g, n => UN.num("soilLoss", +n, 0)); // "160–310" in the chosen unit
+    $("#wegTable").innerHTML = `<thead><tr><th>WEG</th><th class="l">Texture guide</th><th>I<small>${esc(UN.sym("soilLoss"))}</small></th></tr></thead><tbody>`
+      + S.WEG_INFO.map(w => `<tr class="${w.g === g ? "on" : ""}"><td><b>${w.g}</b></td><td class="l"><b>${esc(w.name)}</b>${w.g === g ? ` ${here}` : ""}<span class="def">${esc(w.def)}</span></td><td>${iTxt(w.I)}</td></tr>`).join("")
       + "</tbody>";
   }
 
@@ -1227,12 +1349,12 @@
     const site = S.siteParams(s, d, surf);
     const f = (v, n) => (v === null || v === undefined ? "—" : fmt(v, n));
     const cols = [
-      ["Horizon", l => esc(l.hz) + (l.edited ? " ✎" : ""), ""], ["Depth", l => `${f(l.top, 0)}–${f(l.bot, 0)}`, "cm"],
+      ["Horizon", l => esc(l.hz) + (l.edited ? " ✎" : ""), ""], ["Depth", l => `${UN.num("depth", l.top)}–${UN.num("depth", l.bot)}`, UN.sym("depth")],
       ["Texture", l => esc(l.texture), ""], ["Sand", l => f(l.sand, 1), "%"], ["Silt", l => f(l.silt, 1), "%"],
       ["Clay", l => f(l.clay, 1), "%"], ["V.f. sand", l => f(l.vfs, 1), "%"], ["OM", l => f(l.om, 2), "%"],
       ["Org. C", l => f(l.oc, 2), "%"], ["Bulk dens.", l => f(l.bd, 2), "g/cm³"], ["LL 15 bar", l => f(l.ll, 3), "cm³/cm³"],
-      ["DUL ⅓ bar", l => f(l.dul, 3), "cm³/cm³"], ["Saturation", l => f(l.sat, 3), "cm³/cm³"], ["AWC", l => f(l.awc, 3), "cm/cm"],
-      ["Ksat", l => f(l.ksat, 2), "cm/h"], ["pH", l => f(l.ph, 1), "1:1 H₂O"], ["CEC", l => f(l.cec, 1), "cmol/kg"],
+      ["DUL ⅓ bar", l => f(l.dul, 3), "cm³/cm³"], ["Saturation", l => f(l.sat, 3), "cm³/cm³"], ["AWC", l => (l.awc === null || l.awc === undefined ? "—" : UN.num("awc", l.awc, ["mm/m"].includes(UN.sym("awc")) ? 0 : 3)), UN.sym("awc")],
+      ["Ksat", l => (l.ksat === null || l.ksat === undefined ? "—" : UN.num("ksat", l.ksat / 0.36)), UN.sym("ksat")], ["pH", l => f(l.ph, 1), "1:1 H₂O"], ["CEC", l => f(l.cec, 1), "cmol/kg"],
       ["CaCO₃", l => f(l.caco3, 0), "%"], ["Gypsum", l => f(l.gypsum, 0), "%"], ["EC", l => f(l.ec, 1), "dS/m"],
       ["SAR", l => f(l.sar, 0), ""], ["Coarse frag.", l => f(l.cf, 0), "%"], ["Kw", l => f(l.kw, 2), ""],
       ["Root growth", l => f(l.srgf, 2), "factor"], ["Total N est.", l => f(l.ni, 3), "%"],
@@ -1246,19 +1368,19 @@
       P("Particle-size class", esc(d.taxpartsize || "—")), P("Temperature regime", esc(d.taxtempregime || "—")), P("Moisture subclass", esc(d.taxmoistscl || "—")),
       P("Slope (survey)", site.slope !== null ? `${fmt(site.slope, 1)}% (${f(site.slopeRange[0], 0)}–${f(site.slopeRange[1], 0)})` : "—"),
       P("Slope (DEM, ±100 m)", e ? `${fmt(e.slope, 1)}%, facing ${U.compass(e.aspect)} · ${esc(e.src)}` : "—"),
-      P("Elevation", e ? `${fmt(e.z, 0)} m (${fmt(e.z * 3.28084, 0)} ft)` : (d.elev_r ? `${fmt(d.elev_r, 0)} m` : "—")),
-      P("Soil depth", site.depth ? `${fmt(site.depth, 0)} cm` : "—"),
-      P("Restrictive layer", site.restriction ? `${esc(site.restriction.kind)} at ${fmt(site.restriction.depth, 0)} cm` : "none reported"),
+      P("Elevation", e ? UN.fmt("elev", e.z) : (d.elev_r ? UN.fmt("elev", d.elev_r) : "—")),
+      P("Soil depth", site.depth ? UN.fmt("depth", site.depth) : "—"),
+      P("Restrictive layer", site.restriction ? `${esc(site.restriction.kind)} at ${UN.fmt("depth", site.restriction.depth)}` : "none reported"),
       P("Drainage class", esc(site.drainage || "—")), P("Hydrologic group", esc(site.hydgrp || "—")), P("Surface runoff", esc(site.runoff || "—")),
-      P("Dry albedo", f(site.albedo, 2)), P("Stage-1 evaporation limit", `${f(site.u, 0)} mm`), P("Drainage rate", site.drainRate !== null ? `${f(site.drainRate, 2)} /day` : "—"),
-      P("Runoff curve number", f(site.cn, 0)), P("Avail. water 0–150 cm", site.aws150 !== null ? `${fmt(site.aws150, 1)} cm` : "—"),
-      P("T factor (tolerable loss)", site.tfact !== null ? `${fmt(site.tfact, 0)} t/ac/yr` : "—"), P("Kw (surface)", f(site.kw, 2)),
-      P("WEG / I (0–310)", surf ? `${esc(surf.weg || "—")} / ${f(surf.wei, 0)} t/ac/yr` : "—"),
+      P("Dry albedo", f(site.albedo, 2)), P("Stage-1 evaporation limit", site.u !== null && site.u !== undefined ? UN.fmt("waterDepth", site.u) : "—"), P("Drainage rate", site.drainRate !== null ? `${f(site.drainRate, 2)} /day` : "—"),
+      P("Runoff curve number", f(site.cn, 0)), P(`Avail. water 0–${UN.fmt("depth", 150)}`, site.aws150 !== null ? UN.fmt("waterDepth", site.aws150 * 10) : "—"),
+      P("T factor (tolerable loss)", site.tfact !== null ? UN.fmt("soilLoss", site.tfact, UN.sym("soilLoss") === "t/ha/yr" ? 1 : 0) : "—"), P("Kw (surface)", f(site.kw, 2)),
+      P(`WEG / I (${UN.range("soilLoss", 0, 310, 0)})`, surf ? `${esc(surf.weg || "—")} / ${surf.wei !== null && surf.wei !== undefined ? esc(UN.fmt("soilLoss", surf.wei, 0)) : "—"}` : "—"),
       P("Capability class (dry / irr.)", `${esc(site.lcc || "—")} / ${esc(site.lccIrr || "—")}`),
       P("Climatic factor C", s.cFactor ? fmt(s.cFactor, 0) : "—"), P("Rainfall factor R", s.rFactor ? fmt(s.rFactor, 0) : "—"),
-      P("Mean annual precip", site.map ? `${fmt(site.map / 25.4, 0)} in` : "—"), P("Mean annual air temp", site.airtemp ? `${fmt(site.airtemp, 1)} °C` : "—"),
+      P("Mean annual precip", site.map ? UN.fmt("precip", site.map, 0) : "—"), P("Mean annual air temp", site.airtemp ? UN.fmt("temp", site.airtemp) : "—"),
       P("Frost-free days", site.ffd ? fmt(site.ffd, 0) : "—"),
-      P("Range production (normal yr)", site.rsprod ? `${fmt(site.rsprod, 0)} lb/ac` : "—"),
+      P("Range production (normal yr)", site.rsprod ? UN.fmt("massArea", site.rsprod) : "—"),
       P("Ecological site", d.eco ? `<a href="https://edit.jornada.nmsu.edu/catalogs/esd/${esc(d.eco.ecoclassid.slice(1, 5))}/${esc(d.eco.ecoclassid)}" target="_blank" rel="noopener">${esc(d.eco.ecoclassid)}</a>` : "—"),
       P("MLRA", s.mlra ? `${esc(s.mlra.sym)}` : "—"), P("Survey area", esc(s.mapunit.areasymbol || "—")), P("Map unit key", esc(String(s.mukey))),
     ].join("");
@@ -1267,14 +1389,17 @@
     const plants = d.plants.filter(p => p.plantsciname).slice(0, 12);
     const plantTbl = plants.length ? `<div><h4>Reference native plant community (% of production)</h4><div class="table-wrap"><table class="grid"><thead><tr><th>Plant</th><th>Scientific name</th><th>%</th></tr></thead>
       <tbody>${plants.map(p => `<tr><td>${esc(p.plantcomname || p.plantsym)}</td><td class="l"><i>${esc(p.plantsciname)}</i></td><td>${f(num(p.rangeprod), 0)}</td></tr>`).join("")}</tbody></table></div></div>` : "";
-    const comps = `<div><h4>Components in this map unit</h4><div class="table-wrap"><table class="grid"><thead><tr><th>Component</th><th>%</th><th>WEG</th><th>I<small>t/ac/yr</small></th><th>Slope<small>%</small></th><th>Drainage</th><th>Ecological site</th></tr></thead>
-      <tbody>${s.components.map(c => `<tr><td>${esc(c.compname)}${c.cokey === d.cokey ? " ★" : ""}</td><td>${f(c.comppct_r, 0)}</td><td>${esc(c.weg || "—")}</td><td>${f(num(c.wei), 0)}</td><td>${f(num(c.slope_r), 1)}</td><td class="l">${esc(c.drainagecl || "—")}</td><td class="l">${esc(c.eco ? c.eco.ecoclassname : "—")}</td></tr>`).join("")}</tbody></table></div></div>`;
+    const comps = `<div><h4>Components in this map unit</h4><div class="table-wrap"><table class="grid"><thead><tr><th>Component</th><th>%</th><th>WEG</th><th>I<small>${esc(UN.sym("soilLoss"))}</small></th><th>Slope<small>%</small></th><th>Drainage</th><th>Ecological site</th></tr></thead>
+      <tbody>${s.components.map(c => `<tr><td>${esc(c.compname)}${c.cokey === d.cokey ? " ★" : ""}</td><td>${f(c.comppct_r, 0)}</td><td>${esc(c.weg || "—")}</td><td>${num(c.wei) === null ? "—" : UN.num("soilLoss", num(c.wei), 0)}</td><td>${f(num(c.slope_r), 1)}</td><td class="l">${esc(c.drainagecl || "—")}</td><td class="l">${esc(c.eco ? c.eco.ecoclassname : "—")}</td></tr>`).join("")}</tbody></table></div></div>`;
     box.innerHTML = `<div><h4>Horizons — ${esc(d.compname)}</h4>${table}<p class="fine">Water retention, conductivity and bulk density come from the survey; rows marked ✎ use your edited values with Saxton &amp; Rawls (2006). Root growth factor = exp(−0.02 × mid-depth) below 15 cm, 0 below a restrictive layer. Total N estimated as organic C ÷ 10.</p></div>
       <div><h4>Site and classification</h4><div class="param-grid">${params}</div></div>
       ${comps}${yields}${plantTbl}
-      <div class="export-row"><button class="btn small" id="dlCsv">Download CSV</button><button class="btn small" id="dlSol">Download crop-model .SOL</button></div>`;
+      <div class="export-row"><button class="btn small" id="dlCsv">Download CSV</button><button class="btn small" id="dlSol">Download DSSAT .SOL</button></div>`;
     $("#dlCsv").onclick = () => U.download(`soil_${s.mukey}_${d.compname.replace(/\W+/g, "_")}.csv`, S.toCSV(s, layers, site), "text/csv");
-    $("#dlSol").onclick = () => U.download(`WG${s.mukey}.SOL`, S.toSOL(s, layers, site, s.mukey % 1e8));
+    $("#dlSol").onclick = () => { // a component without water retention or bulk density (urban land, pits) has no DSSAT soil
+      try { U.download("WG.SOL", WG.models.writers.dssatSol(WG.models.surveySoil(state))); }
+      catch (e) { console.warn(e); U.toast(`No DSSAT soil file for ${d.compname}: ${e.message || e}.`, 6000); }
+    };
   }
 
   /* ============ PRACTICES TAB ============ */
@@ -1285,6 +1410,30 @@
       state, surface: currentSurface(), risk: riskModel(), onChange: () => renderPractices(),
     });
   }
+
+  /* A change in the units table redraws every view that shows numbers. */
+  UN.on(() => {
+    $("#unitSel").value = UN.sym("wind");
+    renderLegend(); buildLayerSheet();
+    $("#thrVal").textContent = thrTxt(state.thr);
+    if (!state.site) {
+      try { // keep ?units= in the address in step with the choice, so a reload does not bring an old one back
+        const q = new URLSearchParams(location.search);
+        q.delete("units");
+        if (UN.query()) q.set("units", UN.preset);
+        const s = q.toString();
+        history.replaceState(null, "", location.pathname + (s ? `?${s}` : ""));
+      } catch (e) { /* file:// */ }
+      return;
+    }
+    renderHeader(); renderStats(); renderRisk(); renderWegTable(currentSurface());
+    if (state.wind && !state.wind.error) renderWind();
+    renderSoilSummary(); renderSoilDetail(); renderPractices();
+    const { lat, lon } = state.site;
+    try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}${windQ()}${UN.query()}${KEEP_Q}`); } catch (e) { /* file:// */ }
+  });
+  $("#unitSel").value = UN.sym("wind");
+  $("#thrVal").textContent = thrTxt(state.thr);
 
   /* first paint */
   buildLayerSheet();

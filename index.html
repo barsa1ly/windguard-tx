@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=19">
+  <link rel="stylesheet" href="css/app.css?v=25">
 </head>
 <body>
 <div id="app" class="app">
@@ -110,6 +110,9 @@
       <button id="areaBtn" class="tool-btn" title="Analyse a field or area" aria-label="Analyse a field or area">
         <svg viewBox="0 0 24 24"><path d="M5 7.5 11 4l8.5 4-1.5 10L6.5 19.5Z"/><circle cx="5" cy="7.5" r="1.6"/><circle cx="11" cy="4" r="1.6"/><circle cx="19.5" cy="8" r="1.6"/><circle cx="18" cy="18" r="1.6"/><circle cx="6.5" cy="19.5" r="1.6"/></svg>
       </button>
+      <button id="unitsBtn" class="tool-btn" title="Units (metric or US)" aria-label="Units">
+        <svg viewBox="0 0 24 24"><path d="M3 15.5 15.5 3 21 8.5 8.5 21Z"/><path d="m7 12 2 2M10 9l2 2M13 6l2 2M8.5 15.5l1 1M11.5 12.5l1 1"/></svg>
+      </button>
       <button id="methodsBtn" class="tool-btn" title="Methods, equations and data sources" aria-label="Methods, equations and data sources">
         <svg viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8.5 12h7M8.5 15.5h7M8.5 8.5h3"/></svg>
       </button>
@@ -136,6 +139,9 @@
         <div class="site-sub"><span id="siteCoords">—</span><span id="siteElev"></span></div>
       </div>
       <div class="head-actions">
+        <button id="dataBtn" class="icon-btn" title="Download soil and weather for crop and watershed models, tables and series" aria-label="Download data for this location">
+          <svg viewBox="0 0 24 24"><path d="M12 3v11M7.5 9.5 12 14l4.5-4.5M4 15v4.5h16V15"/></svg>
+        </button>
         <button id="expandMapBtn" class="icon-btn" title="Bigger map" aria-label="Bigger map">
           <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
         </button>
@@ -164,26 +170,23 @@
             <div class="risk-gauge" id="riskGauge" aria-hidden="true"></div>
           </div>
           <div class="risk-legend">
-            <div class="risk-scale" id="riskScale" role="list" aria-label="Risk classes, tons per acre per year"></div>
+            <div class="risk-scale" id="riskScale" role="list" aria-label="Risk classes"></div>
+            <div class="facts" id="riskFacts"></div>
             <p class="risk-unit" id="riskUnit"></p>
           </div>
           <p class="risk-text" id="riskText">Fetching soil survey and 10 years of hourly wind for this point.</p>
           <div class="risk-links"><button class="link risk-how" data-methods="m-erod">How this is calculated →</button><button class="link risk-how" data-methods="m-scales">What the numbers mean →</button></div>
         </div>
 
-        <div class="stat-grid" id="statGrid">
-          <div class="stat"><span class="k">Mean wind</span><span class="v" id="stWind">—</span><span class="s" id="stWindS"></span></div>
-          <div class="stat"><span class="k">Erosive wind hours/yr</span><span class="v" id="stHours">—</span><span class="s" id="stHoursS"></span></div>
-          <div class="stat"><span class="k">Prevailing erosive wind</span><span class="v" id="stDir">—</span><span class="s" id="stDirS"></span></div>
-          <div class="stat"><span class="k">Wind Erodibility Group</span><span class="v" id="stWeg">—</span><span class="s" id="stWegS"></span></div>
-          <div class="stat"><span class="k">Climatic factor C</span><span class="v" id="stC">—</span><span class="s" id="stCS"></span></div>
-          <div class="stat"><span class="k">Land cover</span><span class="v" id="stLc">—</span><span class="s" id="stLcS"></span></div>
+        <div class="card">
+          <div class="card-h"><h3>At a glance</h3></div>
+          <div class="facts" id="glance"></div>
         </div>
 
         <div class="card">
           <div class="card-h"><h3>When is this location most wind-prone?</h3></div>
           <div class="month-strip" id="monthStrip"></div>
-          <p class="fine" id="monthStripNote">Red months carry the most erosive wind energy under dry conditions — keep soil covered then.</p>
+          <p class="fine" id="monthStripNote">Red: 10% or more of the year's erosive wind energy, in dry conditions.</p>
         </div>
 
         <div class="card">
@@ -221,62 +224,71 @@
               <option value="5">Last 5 years</option>
               <option value="10" selected>Last 10 years</option>
               <option value="20">Last 20 years</option>
+              <option value="custom">Custom dates…</option>
             </select>
           </label>
           <label>Units
             <select id="unitSel">
               <option value="mph" selected>mph</option>
-              <option value="ms">m/s</option>
+              <option value="m/s">m/s</option>
+              <option value="km/h">km/h</option>
+              <option value="kn">kn</option>
             </select>
           </label>
           <label class="grow">Erosive threshold <b id="thrVal">18 mph</b>
             <input id="thrRange" type="range" min="5" max="12" step="0.5" value="8">
           </label>
         </div>
-
-        <div class="card">
-          <div class="card-h"><h3>Seasonal erosive wind</h3><span class="tag" id="windSrcTag">hourly</span></div>
-          <div class="chart-box tall"><canvas id="chSeason"></canvas></div>
-          <div class="chart-legend">
-            <span><i class="sw red"></i>High-risk month</span><span><i class="sw amber"></i>Elevated</span><span><i class="sw gray"></i>Lower</span><span><i class="sw line"></i>Mean wind speed</span>
-          </div>
-          <p class="fine">Bars: average hours per year with wind above the erosive threshold. Color weighs wind energy above threshold by dryness (1 − precip/ET₀).</p>
+        <div class="period-custom" id="periodCustom" hidden>
+          <label>From <input type="date" id="periodFrom"></label>
+          <label>To <input type="date" id="periodTo"></label>
+          <button class="btn small primary" id="periodApply">Apply</button>
+          <span class="fine" id="periodLimits"></span>
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>Wind speed and gusts by month</h3></div>
+          <div class="card-h"><h3>Seasonal erosive wind</h3><span class="card-tools"><span class="tag" id="windSrcTag">hourly</span><button class="dl-btn" data-fig="chSeason" title="Download this figure or its data" aria-label="Download seasonal erosive wind chart"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></span></div>
+          <div class="chart-box tall"><canvas id="chSeason"></canvas></div>
+          <div class="chart-legend" id="seasonLegend">
+            <span><i class="sw red"></i>High-risk month</span><span><i class="sw amber"></i>Elevated</span><span><i class="sw gray"></i>Lower</span><span><i class="sw line"></i>Mean wind speed</span>
+          </div>
+          <p class="fine" id="seasonNote">Bars: average hours per year with wind above the erosive threshold. Color weighs wind energy above threshold by dryness (1 − precip/ET₀).</p>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Wind speed and gusts by month</h3><button class="dl-btn" data-fig="chSpeed" title="Download this figure or its data" aria-label="Download wind speed and gusts chart"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></div>
           <div class="chart-box"><canvas id="chSpeed"></canvas></div>
         </div>
 
         <div class="two-col">
           <div class="card">
-            <div class="card-h"><h3>Erosive wind rose</h3></div>
+            <div class="card-h"><h3>Erosive wind rose</h3><button class="dl-btn" data-fig="rose" title="Download this figure or its data" aria-label="Download wind rose"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></div>
             <div id="roseBox" class="rose-box"></div>
             <p class="fine" id="roseNote"></p>
           </div>
           <div class="card">
-            <div class="card-h"><h3>Moisture: precipitation vs ET₀</h3><span class="tag" id="moistTag">gridMET</span></div>
+            <div class="card-h"><h3>Moisture: precipitation vs ET₀</h3><span class="card-tools"><span class="tag" id="moistTag">gridMET</span><button class="dl-btn" data-fig="chWater" title="Download this figure or its data" aria-label="Download precipitation and ET0 chart"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></span></div>
             <div class="chart-box"><canvas id="chWater"></canvas></div>
             <p class="fine">Months where ET₀ far exceeds rain keep the surface dry and erodible.</p>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>Year-to-year trend</h3><span class="tag" id="trendTag"></span></div>
+          <div class="card-h"><h3>Year-to-year trend</h3><span class="card-tools"><span class="tag" id="trendTag"></span><button class="dl-btn" data-fig="chTrend" title="Download this figure or its data" aria-label="Download trend chart"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></span></div>
           <div class="chart-box"><canvas id="chTrend"></canvas></div>
           <p class="fine" id="trendNote"></p>
         </div>
 
         <div class="card" id="calCard" hidden>
           <div class="card-h"><h3>Reanalysis vs measured wind</h3>
-            <select id="stnSel" class="mini-select" aria-label="Calibration station"></select></div>
+            <span class="card-tools"><select id="stnSel" class="mini-select" aria-label="Calibration station"></select><button class="dl-btn" data-fig="chCal" title="Download this figure or its data" aria-label="Download calibration chart"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></span></div>
           <div class="chart-box"><canvas id="chCal"></canvas></div>
           <div class="kv" id="calKv" style="margin-top:10px"></div>
           <p class="fine">Hourly reanalysis smooths wind over a 9–50 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the station (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
         </div>
 
         <div class="card">
-          <div class="card-h"><h3>Wind-erosion climate indices</h3></div>
+          <div class="card-h"><h3>Wind-erosion climate indices</h3><button class="dl-btn" data-csv="windIdx" title="Download this table as CSV" aria-label="Download wind-erosion climate indices as CSV"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></div>
           <div class="kv" id="windIdx"></div>
         </div>
         <p class="source" id="windSource"></p>
@@ -310,7 +322,7 @@
         </div>
 
         <div class="card" id="wegCard">
-          <div class="card-h"><h3>Wind Erodibility Groups: what the classes mean</h3><span class="tag" id="wegTag"></span></div>
+          <div class="card-h"><h3>Wind Erodibility Groups: what the classes mean</h3><span class="card-tools"><span class="tag" id="wegTag"></span><button class="dl-btn" data-csv="weg" title="Download this table as CSV" aria-label="Download Wind Erodibility Group table as CSV"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></span></div>
           <p class="fine">NRCS sorts surface soils into nine Wind Erodibility Groups (WEG) by how easily they blow when bare and dry: 1, 2, 3, 4, 4L, 5, 6, 7 and 8. Group <b>1</b> is the most erodible and group <b>8</b> is not erodible. Each group has an erodibility index <b>I</b>: the tons of soil per acre per year a wide, bare, smooth field would lose in the climate of Garden City, Kansas. I runs from 0 to 310; groups 3, 4 and 4L share I = 86, and 4L holds calcareous (limy) loamy soils.</p>
           <div class="table-wrap"><table class="grid weg-table" id="wegTable"></table></div>
           <p class="fine"><button class="link" id="wegFull">Show all definitions</button> · For a named soil, NRCS uses the group recorded in the soil survey; the texture guide is for soils that are not identified (<a href="https://efotg.sc.egov.usda.gov/references/public/TX/Wind_Erosion.pdf" target="_blank" rel="noopener">National Agronomy Manual, Part 502</a>). So a soil's group can differ from what its texture suggests: Pullman clay loam is WEG 7. Rock fragments move a soil to a less erodible group: one group at 15–35% by volume, two at 35–60%, I = 0 above 60% (sands and loamy sands move less). Texture guide: USDA-NRCS <a href="https://directives.nrcs.usda.gov/sites/default/files2/1725389517/Part%20618%20Subpart%20B%20%E2%80%93%20Exhibits.pdf" target="_blank" rel="noopener">National Soil Survey Handbook, Part 618 Subpart B</a>, §618.93 (2024). “Calcareous” means the soil fizzes strongly in dilute acid (free lime).</p>
@@ -370,8 +382,52 @@
       <button data-sec="m-erod">Erodibility</button>
       <button data-sec="m-wind">Wind &amp; climate</button>
       <button data-sec="m-soil">Soil water</button>
+      <button data-sec="m-files">Model files</button>
     </nav>
     <div class="sheet-body" id="methodsBody"></div>
+  </div>
+
+  <!-- ============ UNITS SHEET ============ -->
+  <div id="unitsSheet" class="sheet wide" role="dialog" aria-label="Units" hidden>
+    <div class="sheet-h"><h3>Units</h3><button class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <nav class="seg-nav" id="unitPresets" aria-label="Unit systems"></nav>
+    <div class="sheet-body">
+      <div class="table-wrap"><table class="grid units-table" id="unitsTable"></table></div>
+      <p class="fine">Every number on screen, in the charts and in CSV tables follows this table, and your choice is remembered on this device. Model files (DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop) always use each model's own units. Values defined in US units keep the original in brackets: erodibility I and the risk classes are NRCS figures in tons per acre per year, and practice specifications come from Texas NRCS standards.</p>
+    </div>
+  </div>
+
+  <!-- ============ FIGURE DOWNLOAD SHEET ============ -->
+  <div id="figSheet" class="sheet" role="dialog" aria-label="Download figure" hidden>
+    <div class="sheet-h"><h3 id="figTitle">Download figure</h3><button class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="sheet-body">
+      <div class="form-grid">
+        <label>Format<select id="figFormat"></select></label>
+        <label>Size preset<select id="figPreset">
+          <option value="screen">As on screen</option>
+          <option value="3.5x2.6">Journal, 1 column (3.5 in / 89 mm)</option>
+          <option value="5.5x3.6">Journal, 1.5 column (5.5 in / 140 mm)</option>
+          <option value="7.2x4.2">Journal, 2 columns (7.2 in / 183 mm)</option>
+          <option value="10x5.6">Slide (10 in / 254 mm)</option>
+          <option value="custom">Custom</option>
+        </select></label>
+        <label>Width<input id="figW" type="number" min="0.5" step="0.1"></label>
+        <label>Height<input id="figH" type="number" min="0.5" step="0.1"></label>
+        <label>Size unit<select id="figUnit"><option value="in">inches</option><option value="cm">cm</option><option value="mm">mm</option><option value="px">pixels at the DPI</option></select></label>
+        <label>Resolution (DPI)<select id="figDpi"><option>72</option><option>96</option><option>150</option><option selected>300</option><option>600</option><option>1200</option></select></label>
+        <label>Font size (pt)<input id="figFont" type="number" min="5" max="24" step="0.5" value="8"></label>
+        <label class="check"><input type="checkbox" id="figTitleOn" checked> Title</label>
+        <label class="check"><input type="checkbox" id="figSubOn" checked> Location and period line</label>
+      </div>
+      <p class="fine" id="figInfo"></p>
+      <div class="area-actions"><button class="btn primary" id="figGo">Download</button></div>
+    </div>
+  </div>
+
+  <!-- ============ DATA DOWNLOAD SHEET ============ -->
+  <div id="dataSheet" class="sheet wide" role="dialog" aria-label="Download data for this location" hidden>
+    <div class="sheet-h"><h3>Download data for this location</h3><button class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="sheet-body" id="dataBody"></div>
   </div>
 
   <!-- ============ AREA ANALYSIS (non-modal: the map stays usable) ============ -->
@@ -401,15 +457,21 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=19"></script>
-<script src="data/stations.js?v=19"></script>
-<script src="js/util.js?v=19"></script>
-<script src="js/soil.js?v=19"></script>
-<script src="js/wind.js?v=19"></script>
-<script src="js/charts.js?v=19"></script>
-<script src="js/practices.js?v=19"></script>
-<script src="js/methods.js?v=19"></script>
-<script src="js/app.js?v=19"></script>
-<script src="js/area.js?v=19"></script>
+<script src="data/layers.js?v=25"></script>
+<script src="data/stations.js?v=25"></script>
+<script src="js/util.js?v=25"></script>
+<script src="js/units.js?v=25"></script>
+<script src="js/export.js?v=25"></script>
+<script src="js/soil.js?v=25"></script>
+<script src="js/wind.js?v=25"></script>
+<script src="js/charts.js?v=25"></script>
+<script src="js/practices.js?v=25"></script>
+<script src="js/methods.js?v=25"></script>
+<script src="js/app.js?v=25"></script>
+<script src="js/downloads.js?v=25"></script>
+<script src="js/models.js?v=25"></script>
+<script src="js/writers.js?v=25"></script>
+<script src="js/datasheet.js?v=25"></script>
+<script src="js/area.js?v=25"></script>
 </body>
 </html>
