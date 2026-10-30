@@ -173,10 +173,13 @@ WG.models = (function () {
     };
     const f = Object.fromEntries(Object.keys(SOIL_NAMES).map(k => [k, factor(k)]));
     // water contents above 1 can only be percent; sand and clay of at most 1 can only be fractions
-    ["ll", "dul", "sat"].forEach(k => { if (col(k).some(v => v > 1)) { f[k] = 0.01; notes.push(`${head[idx[k]]} is above 1, so it was read as percent and divided by 100.`); } });
+    const pct = ["ll", "dul", "sat"].filter(k => col(k).some(v => v > 1));
+    pct.forEach(k => { f[k] = 0.01; });
+    if (pct.length) notes.push(`Read as percent and divided by 100: ${pct.map(k => head[idx[k]]).join(", ")}.`);
     const ss = col("sand").concat(col("clay"));
     if (ss.length && ss.every(v => v <= 1) && ss.some(v => v > 0)) ["sand", "silt", "clay"].forEach(k => { if (f[k] === 1) f[k] = 100; }), notes.push("Sand and clay are all 1 or less, so they were read as fractions and multiplied by 100.");
-    Object.keys(f).forEach(k => { if (f[k] !== 1 && !["ll", "dul", "sat"].includes(k) && !(f[k] === 100 && ["sand", "silt", "clay"].includes(k))) notes.push(`${head[idx[k]]} was converted from the unit in its header.`); });
+    const moved = Object.keys(f).filter(k => f[k] !== 1 && !["ll", "dul", "sat"].includes(k) && !(f[k] === 100 && ["sand", "silt", "clay"].includes(k)));
+    if (moved.length) notes.push(`Converted from the units in their names: ${moved.map(k => head[idx[k]]).join(", ")}.`);
     const out = body.map((x, r) => {
       const v = k => { const c = idx[k] >= 0 ? x[idx[k]] ?? "" : "", n = num(c); return n === null || f[k] === 1 ? c : +(n * f[k]).toFixed(6); };
       const row = Object.fromEntries(SOIL_COLS.map(([k]) => [k, v(k)]));
@@ -325,8 +328,27 @@ WG.models = (function () {
     const dec = s => (sep !== "," && /^-?\d+,\d+$/.test(s) ? s.replace(",", ".") : s);
     return out.map(x => x.map(s => dec(s.replace(/^\ufeff/, "").trim()))).filter(x => x.length && !(x.length === 1 && x[0] === "") && !/^#/.test(x[0]));
   }
-  /* columns by name (units in brackets ignored); u: { temp: "C"|"F", prcp: "mm"|"in", srad: "MJ"|"W"|"ly"|"kWh", wind: "ms"|"mph"|"kmh"|"kn", windHeight: m }.
-     ET0 is read only from a grass-reference column (et0, ETo, ETos, reference ET), in the rain unit. */
+  /* the unit a column's name states, for each kind of column, or null: "tmax (F)", "Rain_mm_Tot", "SlrW_Avg", "WS_ms_Avg" */
+  const unitWords = h => ` ${h.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().replace(/[^a-z0-9.]+|\.(?!\d)/g, " ").replace(/\s+/g, " ").trim()} `;
+  const HEAD_UNITS = {
+    temp: [["F", /\s(f|degf|fahrenheit|tf)\s|\st(max|min|mx|mn|dew|mean|avg)f\s/], ["C", /\s(c|degc|celsius|tc)\s|\st(max|min|mx|mn|dew|mean|avg)c\s/], ["K", /\s(k|kelvin)\s/]],
+    rain: [["mm", /\s(mm|millimet\w*)\s/], ["cm", /\s(cm|centimet\w*)\s/], ["in", /\s(inch|inches)\s|\sin\s(tot\s|total\s)?$/]],
+    srad: [["MJ", /\smj\s/], ["kWh", /\sk\s?wh\s/], ["Wh", /\swh\s/], ["kJ", /k\s?j\s/], ["J", /\sj\s/], ["W", /\s(w|watt|watts)\s/], ["ly", /\s(ly|langleys?|cal)\s/]],
+    wind: [["ms", /\s(ms|m\ss|mps|m\ssec|met(er|re)s?\s(per\s)?sec\w*)\s/], ["mph", /\s(mph|mi\sh|miles?\sper\shour)\s/], ["kmh", /\s(kmh|km\sh|kph|kilomet\w*)\s/], ["kn", /\s(kn|kt|kts|knots?)\s/]],
+  };
+  const statedUnit = (kind, h) => {
+    const t = unitWords(h), hit = HEAD_UNITS[kind].find(([, re]) => re.test(t));
+    return hit ? hit[0] : kind === "rain" && /[([]\s*in\b/i.test(h) ? "in" : null;
+  };
+  // the height of a wind column by its name, in metres, or null: "wind at 3 m", "WS10M", "wind_speed_10m_mean", "u2"
+  function statedHeight(h) {
+    const t = h.toLowerCase().replace(/_/g, " "), m = t.match(/(\d+(?:\.\d+)?)\s*-?\s*m(?:et(?:er|re)s?)?\b(?!\s*\/)/) || t.match(/\b(?:ws|u|wind)\s?(\d+)\b/), z = m ? +m[1] : null;
+    return z >= 0.5 && z <= 50 ? z : null;
+  }
+  const SOLAR_MJ = { W: 0.0864, ly: 0.04184, kWh: 3.6, Wh: 0.0036, kJ: 0.001, J: 1e-6, MJ: 1 }, WIND_MS = { ms: 1, mph: 0.44704, kmh: 1 / 3.6, kn: 0.514444 };
+  /* columns by name, each in the unit its name states, else in u: { temp: "C"|"F"|"K", prcp: "mm"|"in"|"cm", srad: "MJ"|"W"|"ly"|"kWh"|"kJ", wind: "ms"|"mph"|"kmh"|"kn",
+     windHeight: m }. The result's units say what each column was read in. ET0 is read only from a grass-reference
+     column (et0, ETo, ETos, reference ET), in a rain unit. */
   function parseWeatherCSV(text, u, lat, lon, elev) {
     const rows = csvRows(text);
     if (rows.length < 3) throw new Error("The weather file needs a header row and daily rows.");
@@ -338,11 +360,23 @@ WG.models = (function () {
     if (!L) throw new Error(dated(C) ? "No daily rows could be read; check the date format." : "No date column found: use 'date' (YYYY-MM-DD), or 'year' with 'doy', or year, month and day.");
     // a Campbell TOA5 table stamps each record at the end of its interval: a daily record at 2024-07-02 00:00 holds 1 July
     const toa5 = /^toa5$/i.test(rows[0][0]) && L.cols.date !== undefined, midnight = s => /^\S+[ T]0?0:00(:00)?(\.0+)?(?![\d.:])/.test(s || "");
-    const temp = v => (v === null ? null : u.temp === "F" ? (v - 32) / 1.8 : v);
-    const pr = v => (v === null ? null : u.prcp === "in" ? v * 25.4 : v);
-    const sr = v => (v === null ? null : u.srad === "W" ? v * 0.0864 : u.srad === "ly" ? v * 0.04184 : u.srad === "kWh" ? v * 3.6 : v);
-    const wk = { ms: 1, mph: 0.44704, kmh: 1 / 3.6, kn: 0.514444 }[u.wind || "ms"];
-    const zh = +u.windHeight || 2, to10 = Math.log(10 / 0.03) / Math.log(zh / 0.03), to2 = Math.log(2 / 0.03) / Math.log(zh / 0.03); // log law, open ground z0 = 0.03 m
+    // each column's unit: what its name states, else what the sheet says
+    const unitsOf = (k, kind, chosen) => { const s = C[k] >= 0 ? statedUnit(kind, rows[hi][C[k]]) : null; return { u: s || chosen, stated: !!s }; };
+    const UN = { tmax: unitsOf("tmax", "temp", u.temp), tmin: unitsOf("tmin", "temp", u.temp), tdew: unitsOf("tdew", "temp", u.temp), prcp: unitsOf("prcp", "rain", u.prcp),
+      et0: unitsOf("et0", "rain", u.prcp), srad: unitsOf("srad", "srad", u.srad), wind: unitsOf("wind", "wind", u.wind || "ms") };
+    const temp = (v, k) => (v === null ? null : UN[k].u === "F" ? (v - 32) / 1.8 : UN[k].u === "K" ? v - 273.15 : v);
+    const pr = (v, k) => (v === null ? null : UN[k].u === "in" ? v * 25.4 : UN[k].u === "cm" ? v * 10 : v);
+    const sr = v => (v === null ? null : v * (SOLAR_MJ[UN.srad.u] ?? 1));
+    const wk = WIND_MS[UN.wind.u] ?? 1, zs = C.wind >= 0 ? statedHeight(rows[hi][C.wind]) : null;
+    const zh = zs ?? (+u.windHeight || 2), to10 = Math.log(10 / 0.03) / Math.log(zh / 0.03), to2 = Math.log(2 / 0.03) / Math.log(zh / 0.03); // log law, open ground z0 = 0.03 m
+    // humidity given as a fraction: every value of the column 1 or less
+    const fracs = {};
+    ["rh", "rhmax", "rhmin"].forEach(k => {
+      if (C[k] < 0) return;
+      const a = rows.slice(hi + 1).map(x => +(x[C[k]] || NaN)).filter(v => Number.isFinite(v) && v > -99);
+      fracs[k] = a.length > 0 && a.some(v => v > 0) && a.every(v => v <= 1);
+    });
+    const hum = (x, k) => { const v = nv(x, k); return v !== null && fracs[k] ? v * 100 : v; };
     // blank, text (NA, M) and codes of -99 or below (-99.9, -996, -9999) are missing; "T" (a trace) of rain is 0
     const nv = (x, k) => {
       if (C[k] < 0) return null;
@@ -361,9 +395,9 @@ WG.models = (function () {
       if (toa5 && midnight(x[L.cols.date])) { d--; seen.moved = seen.moved || `${x[L.cols.date]} → ${Wd.isoDay(d)}`; }
       if (byDay.has(d)) seen.dup.add(d);
       if (C.prcp >= 0 && /^t(race)?$/i.test(x[C.prcp] || "")) seen.trace++;
-      const w = nv(x, "wind"), e0 = pr(nv(x, "et0"));
-      byDay.set(d, { prcp: pr(nv(x, "prcp")), tmax: temp(nv(x, "tmax")), tmin: temp(nv(x, "tmin")), srad: sr(nv(x, "srad")), rh: nv(x, "rh"),
-        rhmax: nv(x, "rhmax"), rhmin: nv(x, "rhmin"), tdew: temp(nv(x, "tdew")), wind10: w === null ? null : w * wk * to10, wind2: w === null ? null : w * wk * to2,
+      const w = nv(x, "wind"), e0 = pr(nv(x, "et0"), "et0");
+      byDay.set(d, { prcp: pr(nv(x, "prcp"), "prcp"), tmax: temp(nv(x, "tmax"), "tmax"), tmin: temp(nv(x, "tmin"), "tmin"), srad: sr(nv(x, "srad")), rh: hum(x, "rh"),
+        rhmax: hum(x, "rhmax"), rhmin: hum(x, "rhmin"), tdew: temp(nv(x, "tdew"), "tdew"), wind10: w === null ? null : w * wk * to10, wind2: w === null ? null : w * wk * to2,
         et0: e0 !== null && e0 >= 0 ? e0 : null }); // a negative ET0 is not a value
     }
     if (!byDay.size) throw new Error("No daily rows could be read; check the date format.");
@@ -385,7 +419,9 @@ WG.models = (function () {
     rain.forEach((v, i) => { if (i && v > rain[i - 1]) up++; else if (i && v < rain[i - 1]) down++; });
     if (up >= 5 && !down) notes.push(`${name(C.prcp)} only ever rises, so it looks like a running total, not each day's rain: use a column of daily amounts, or the day-to-day differences.`);
     if (seen.trace) notes.push(`Trace rain ("T") on ${plural(seen.trace, "day", "days")} is read as 0.`);
+    if (Object.values(fracs).some(Boolean)) notes.push("Humidity is 1 or less on every day, so it was read as a fraction and multiplied by 100.");
     const out = { source: "file", lat, lon, elev, columns: Object.fromEntries(keys.filter(k => at[k] >= 0).map(k => [k, rows[hi][at[k]]])), notes,
+      units: Object.fromEntries(Object.keys(UN).filter(k => C[k] >= 0).map(k => [k, UN[k]])), windHeight: { z: zh, stated: zs !== null },
       days: [], prcp: [], tmax: [], tmin: [], srad: [], rh: [], rhmax: [], rhmin: [], tdew: [], vp: [], wind10: [], wind2: [], et0: [] };
     for (let d = d0; d <= d1; d++) {
       const v = byDay.get(d) || {};
@@ -407,6 +443,14 @@ WG.models = (function () {
       out.tdew.push(has(v.tdew) ? v.tdew : vp > 0 ? (237.3 * Math.log(vp / 0.6108)) / (17.27 - Math.log(vp / 0.6108)) : null);
       out.et0.push(v.et0 ?? null);
     }
+    // a unit that does not fit shows in the values: say so, as nothing else would
+    const mid = a => { const s = a.filter(x => x !== null).sort((p, q) => p - q); return s.length ? s[s.length >> 1] : null; };
+    const odd = (k, val, hi2, say) => { if (val !== null && val > hi2) notes.push(`${name(C[k])} reads as ${say(val)} on a typical day: check its unit.`); };
+    odd("tmax", mid(out.tmax), 55, v => `${v.toFixed(0)} °C`);
+    odd("srad", mid(out.srad), 45, v => `${v.toFixed(0)} MJ/m²`);
+    odd("wind", mid(out.wind10), 25, v => `${v.toFixed(0)} m/s at 10 m`);
+    const wet = out.prcp.filter(x => x !== null && x > 0);
+    if (wet.length) odd("prcp", mid(wet), 100, v => `${v.toFixed(0)} mm on a wet day`);
     return out;
   }
   /* fill gaps of a user series from another series on the same days (e.g. gridMET); counts what was filled. ET0 is
@@ -424,9 +468,6 @@ WG.models = (function () {
     });
     return filled;
   }
-  const weatherTemplateCSV = () => WG.export.csv(["date", "tmax (C)", "tmin (C)", "prcp (mm)", "srad (MJ/m2/d)", "rh (%)", "wind (m/s)"],
-    [["2024-01-01", 12.5, -3.1, 0, 11.8, 62, 3.4], ["2024-01-02", 14.2, -1.0, 2.5, 9.6, 71, 4.1]]);
-
   /* ---------- zip ---------- */
   const JSZIP = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
   let zipLib = null;
@@ -446,5 +487,15 @@ WG.models = (function () {
     return z.generateAsync({ type: "blob", compression: "DEFLATE" });
   }
 
-  return { surveySoil, userSoil, SOIL_COLS, soilTemplateCSV, parseSoilCSV, csvRows, parseWeatherCSV, fillGaps, weatherTemplateCSV, relayer, relayerLayers, zip, writers: {}, r };
+  /* the Excel library, for reading and for templates; a failed load is forgotten, so the next try loads it again */
+  const XLSX_LIB = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+  let xlsxLib = null;
+  const loadXlsx = () => (window.XLSX ? Promise.resolve() : xlsxLib || (xlsxLib = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = XLSX_LIB; s.onload = res;
+    s.onerror = () => { xlsxLib = null; s.remove(); rej(new Error("could not load the Excel library; check the connection and try again")); };
+    document.head.appendChild(s);
+  })));
+
+  return { surveySoil, userSoil, SOIL_COLS, soilTemplateCSV, parseSoilCSV, csvRows, parseWeatherCSV, fillGaps, relayer, relayerLayers, zip, loadXlsx, writers: {}, r };
 })();

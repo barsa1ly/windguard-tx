@@ -3,7 +3,7 @@
    user's own layers. Writers live in WG.models.writers. */
 WG.datasheet = (function () {
   const { $, $$, esc, fmt, toast, num } = WG.util;
-  const UN = WG.units, X = WG.export, Wd = WG.wind, M = WG.models, D = WG.downloads;
+  const UN = WG.units, X = WG.export, Wd = WG.wind, M = WG.models, D = WG.downloads, T = WG.templates;
   const state = WG.state;
   // the user's weather file: its text, read again at Download with the units chosen then, and the parse made on loading
   let userWxSrc = null, userWx = null;
@@ -127,17 +127,20 @@ WG.datasheet = (function () {
         </div>
         <p class="fine" id="dlRange"></p>
         <div id="dlWxFile" hidden>
-          <p class="fine">A CSV, text or Excel file with one row per day: <b>date</b> (YYYY-MM-DD, or year and doy), <b>tmax</b>, <b>tmin</b>, <b>prcp</b>; optional <b>srad</b>, <b>rh</b> (or rhmax and rhmin), <b>tdew</b>, <b>wind</b>. <button class="link" id="dlWxTpl">Download a template</button></p>
+          ${T.box("weather")}
           <div class="form-grid">
-            <label>File<input type="file" id="dlWxIn" accept=".csv,.txt,.tsv,.xlsx,.xls"></label>
-            <label>Temperature<select id="uT"><option value="C">°C</option><option value="F">°F</option></select></label>
-            <label>Rain<select id="uP"><option value="mm">mm</option><option value="in">in</option></select></label>
-            <label>Solar radiation<select id="uS"><option value="MJ">MJ/m²/day</option><option value="W">W/m² (daily mean)</option><option value="ly">langley/day</option><option value="kWh">kWh/m²/day</option></select></label>
-            <label>Wind<select id="uW"><option value="ms">m/s</option><option value="mph">mph</option><option value="kmh">km/h</option><option value="kn">kn</option></select></label>
-            <label>Wind measured at (m)<input type="number" id="uWh" value="2" min="0.5" max="50" step="0.5"></label>
+            <label>Your file<input type="file" id="dlWxIn" accept=".csv,.txt,.tsv,.xlsx,.xls"></label>
             <label class="check"><input type="checkbox" id="uFill" checked> Fill gaps from gridMET</label>
           </div>
           <p class="fine dl-status" id="dlWxStatus"></p>
+          <p class="fine">A column whose name states its unit, like <b>tmax (F)</b> or <b>wind at 3 m (mph)</b>, is read in that unit. For the others:</p>
+          <div class="form-grid">
+            <label>Temperature<select id="uT"><option value="C">°C</option><option value="F">°F</option><option value="K">K</option></select></label>
+            <label>Rain<select id="uP"><option value="mm">mm</option><option value="in">in</option><option value="cm">cm</option></select></label>
+            <label>Solar radiation<select id="uS"><option value="MJ">MJ/m²/day</option><option value="W">W/m² (daily mean)</option><option value="ly">langley/day</option><option value="kWh">kWh/m²/day</option><option value="kJ">kJ/m²/day</option></select></label>
+            <label>Wind<select id="uW"><option value="ms">m/s</option><option value="mph">mph</option><option value="kmh">km/h</option><option value="kn">kn</option></select></label>
+            <label>Wind measured at (m)<input type="number" id="uWh" value="2" min="0.5" max="50" step="0.5"></label>
+          </div>
         </div>
       </section>
       <section class="data-sec"><h4>2 · Soil</h4>
@@ -165,8 +168,10 @@ WG.datasheet = (function () {
     // switching to the file takes its dates; the units are applied when the files are made, so they need no re-read here
     $("#dlWx").addEventListener("change", e => { const f = e.target.value === "file"; $("#dlWxFile").hidden = !f; if (f && userWx) fileDates(); dateLimits(); });
     $("#uFill").addEventListener("change", dateLimits);
-    $("#dlWxTpl").addEventListener("click", () => X.save(M.weatherTemplateCSV(), "weather_template.csv", "text/csv;charset=utf-8"));
+    T.wire("weather", $("#dlWxFile"));
     $("#dlWxIn").addEventListener("change", readWxFile);
+    // the file is read again in the units chosen, so what shows is what the files will use
+    ["#uT", "#uP", "#uS", "#uW", "#uWh"].forEach(s => $(s).addEventListener("change", rereadWx));
     $("#dlSoil").addEventListener("change", e => { if (e.target.value === "user") editSoil(); else $("#dlSoilEdit").hidden = true; layerInfo(); });
     $("#dlLayers").addEventListener("change", layerInfo);
     $("#dlDepths").addEventListener("input", layerInfo);
@@ -227,15 +232,6 @@ WG.datasheet = (function () {
 
   /* ---------- the user's weather ---------- */
   /* text of a CSV/TXT file, or of the first sheet of an Excel workbook (.xlsx/.xls, recognised by content) */
-  const XLSX_LIB = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-  let xlsxLib = null;
-  // a failed load is forgotten, so the next file tries again
-  const loadXlsx = () => xlsxLib || (xlsxLib = new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = XLSX_LIB; s.onload = res;
-    s.onerror = () => { xlsxLib = null; s.remove(); rej(new Error("could not load the Excel reader; check the connection and try again")); };
-    document.head.appendChild(s);
-  }));
   const two = n => String(n).padStart(2, "0");
   /* an Excel cell as stored, not as displayed: dates as YYYY-MM-DD, numbers in full, percentages as 0-100 */
   function xlsxCell(c, d1904) {
@@ -251,7 +247,7 @@ WG.datasheet = (function () {
     const buf = new Uint8Array(await f.arrayBuffer());
     const zipOrOle = (buf[0] === 0x50 && buf[1] === 0x4b) || (buf[0] === 0xd0 && buf[1] === 0xcf);
     if (!zipOrOle && !/\.xlsx?$/i.test(f.name)) return new TextDecoder().decode(buf);
-    if (!window.XLSX) await loadXlsx();
+    await M.loadXlsx();
     const wb = XLSX.read(buf, { type: "array", cellNF: true, cellText: false }), ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws || !ws["!ref"]) throw new Error("the first sheet is empty");
     const R = XLSX.utils.decode_range(ws["!ref"]), d1904 = !!(wb.Workbook && wb.Workbook.WBProps && wb.Workbook.WBProps.date1904), out = [];
@@ -265,9 +261,14 @@ WG.datasheet = (function () {
   // the header each quantity was read from (a wrong match shows here), then what the reader noted about the file
   const COL_NAME = { date: "date", year: "year", month: "month", dom: "day", doy: "day of year", tmax: "Tmax", tmin: "Tmin", prcp: "rain", srad: "solar",
     rh: "humidity", rhmax: "RHmax", rhmin: "RHmin", tdew: "dew point", wind: "wind", et0: "ET0" };
+  const UNIT_NAME = { C: "°C", F: "°F", K: "K", mm: "mm", in: "inches", cm: "cm", MJ: "MJ/m²/day", W: "W/m²", ly: "langley/day", kWh: "kWh/m²/day", Wh: "Wh/m²/day", kJ: "kJ/m²/day", J: "J/m²/day", ms: "m/s", mph: "mph", kmh: "km/h", kn: "kn" };
+  const unitNote = (w, k) => {
+    const u = w.units && w.units[k], z = k === "wind" && w.windHeight ? ` at ${w.windHeight.z} m` : "";
+    return u ? ` in ${UNIT_NAME[u.u] || u.u}${z}${u.stated && (k !== "wind" || w.windHeight.stated) ? "" : " (as set below)"}` : "";
+  };
   const readLines = w => {
     const c = Object.entries(w.columns || {});
-    return [c.length ? `Read: ${c.map(([k, h]) => `${COL_NAME[k] || k} from ${h}`).join(", ")}.` : "", ...(Array.isArray(w.notes) ? w.notes : [])].filter(Boolean);
+    return [c.length ? `Read: ${c.map(([k, h]) => `${COL_NAME[k] || k} from ${h}${unitNote(w, k)}`).join(", ")}.` : "", ...(Array.isArray(w.notes) ? w.notes : [])].filter(Boolean);
   };
   const wxSummary = (w, name) => {
     const miss = k => w[k].filter(v => v === null).length;
@@ -287,6 +288,13 @@ WG.datasheet = (function () {
     } catch (e) { userWx = null; userWxSrc = null; $("#dlWxStatus").textContent = `Could not read ${f.name}: ${e.message}`; }
     dateLimits();
     keepForm(); // the dates were set after the input's change event saved the form
+  }
+  function rereadWx() {
+    if (!userWxSrc) return;
+    try {
+      userWx = M.parseWeatherCSV(userWxSrc.text, wxUnits(), state.site.lat, state.site.lon, state.elev ? state.elev.z : null);
+      $("#dlWxStatus").textContent = wxSummary(userWx, userWxSrc.name);
+    } catch (e) { $("#dlWxStatus").textContent = `Could not read ${userWxSrc.name}: ${e.message}`; }
   }
   /* the file read again with the units chosen now, at the download's location */
   function fileWeather(site, elev) {
@@ -314,7 +322,7 @@ WG.datasheet = (function () {
     const box = $("#dlSoilEdit"), meta = userSoilRows.meta;
     box.hidden = false;
     const cell = (i, k) => { const v = userSoilRows[i][k]; return `<td><input data-r="${i}" data-k="${k}" inputmode="decimal" value="${v === null || v === undefined ? "" : typeof v === "number" ? +v.toFixed(["ll", "dul", "sat"].includes(k) ? 3 : 2) : esc(v)}"></td>`; };
-    box.innerHTML = `<p class="fine">Starts from the survey's dominant soil, down to any bedrock or cemented layer; change any value, add or remove layers, or load your own lab results. Blank water retention, bulk density and Ksat are estimated from sand, clay and organic matter (Saxton &amp; Rawls 2006). Depths in cm, Ksat in mm/h. Water contents are for the whole soil, as the survey gives them: if yours are lab values for the fine earth and the layer has coarse fragments, multiply them by (1 − fragments % ÷ 100).</p>
+    box.innerHTML = `${T.box("soil")}<p class="fine">Starts from the survey's dominant soil, down to any bedrock or cemented layer; change any value, add or remove layers, or load your own lab results. Blank water retention, bulk density and Ksat are estimated from sand, clay and organic matter (Saxton &amp; Rawls 2006). In this table depths are in cm and Ksat in mm/h; a loaded file can be in the units its column names state. Water contents are for the whole soil, as the survey gives them: if yours are lab values for the fine earth and the layer has coarse fragments, multiply them by (1 − fragments % ÷ 100).</p>
       <div class="table-wrap"><table class="grid soil-edit"><thead><tr>${M.SOIL_COLS.map(([, l]) => `<th>${esc(l)}</th>`).join("")}<th></th></tr></thead>
       <tbody>${userSoilRows.map((_, i) => `<tr>${M.SOIL_COLS.map(([k]) => cell(i, k)).join("")}<td><button class="link" data-del="${i}" aria-label="Remove layer">✕</button></td></tr>`).join("")}</tbody></table></div>
       ${userSoilRows.notes && userSoilRows.notes.length ? `<p class="fine">${esc(userSoilRows.notes.join(" "))}</p>` : ""}
@@ -324,7 +332,8 @@ WG.datasheet = (function () {
         <label>Slope (%)<input id="usSlope" inputmode="decimal" value="${esc(meta.usSlope)}"></label>
         <label>Dry albedo<input id="usAlb" inputmode="decimal" value="${esc(meta.usAlb)}"></label>
       </div>
-      <div class="area-actions"><button class="btn small" id="usAdd">Add layer</button><button class="btn small" id="usTpl">Download as CSV</button><label class="btn small">Load CSV<input type="file" id="usIn" accept=".csv,.txt" hidden></label><button class="btn small" id="usReset">Back to the survey</button></div>`;
+      <div class="area-actions"><button class="btn small" id="usAdd">Add layer</button><button class="btn small" id="usTpl">Download these layers (CSV)</button><label class="btn small">Load my soil file<input type="file" id="usIn" accept=".csv,.txt,.tsv,.xlsx,.xls" hidden></label><button class="btn small" id="usReset">Back to the survey</button></div>`;
+    T.wire("soil", box);
     box.querySelectorAll("input[data-r]").forEach(inp => inp.addEventListener("change", e => { userSoilRows[+e.target.dataset.r][e.target.dataset.k] = e.target.value; layerInfo(); }));
     ["usName", "usHg", "usSlope", "usAlb"].forEach(id => $("#" + id).addEventListener("change", e => { meta[id] = e.target.value; if (id === "usName") meta.named = true; }));
     box.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", e => { userSoilRows.splice(+e.target.dataset.del, 1); editSoil(); }));
@@ -334,7 +343,7 @@ WG.datasheet = (function () {
       const f = e.target.files[0];
       if (!f) return;
       try {
-        const rows = M.parseSoilCSV(await f.text());
+        const rows = M.parseSoilCSV(await fileText(f));
         rows.meta = { ...meta, usName: meta.named ? meta.usName : "My soil" }; // the file has layers only: the site values stay, the survey's name goes
         userSoilRows = rows;
         editSoil();
@@ -616,7 +625,7 @@ WG.datasheet = (function () {
     const gm = w.filled && w.filled.wind10 ? ` ${w.filled.wind10} days come from gridMET's 10 m wind (2 m = 0.748 × 10 m).` : "";
     const how = w.source === "gridmet" ? "gridMET daily mean wind at 10 m; the 2 m wind is 0.748 × the 10 m value (FAO-56 Eq. 47)."
       : w.source === "power" ? "NASA POWER daily mean wind at 10 m (WS10M) and at 2 m (WS2M), each used as it is."
-        : has(o.file && o.file.wind10) ? `your file's wind, measured at ${o.windHeight} m and moved to 10 m and 2 m with the log law (roughness 0.03 m).${gm}`
+        : has(o.file && o.file.wind10) ? `your file's wind, measured at ${o.file.windHeight ? o.file.windHeight.z : o.windHeight} m and moved to 10 m and 2 m with the log law (roughness 0.03 m).${gm}`
           : `your file has none.${gm || " The model files leave it out or mark it missing."}`;
     return `Wind: ${how} Each model file states its height.`;
   }

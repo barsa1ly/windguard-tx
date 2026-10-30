@@ -352,6 +352,19 @@ body:not(.leaflet-dragging) .leaflet-container.off-tx { cursor: not-allowed; } /
 .model-grid label small { display: block; font-weight: 400; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 .model-grid input { margin-top: 3px; }
 .dl-status { min-height: 1.4em; }
+.tpl { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 6px 0 10px; }
+.tpl summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--accent); }
+.tpl[open] summary { margin-bottom: 6px; }
+.tpl h4 { margin: 10px 0 6px; }
+table.grid.tpl-table td, table.grid.tpl-table th { text-align: left; white-space: normal; vertical-align: top; }
+table.grid.tpl-table td:first-child, table.grid.tpl-table th:first-child { position: static; text-align: center; width: 54px; }
+table.grid.tpl-table small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; }
+table.grid.tpl-table small.tpl-need { display: inline; color: var(--accent); font-weight: 600; }
+table.grid.tpl-table select { height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; font: inherit; background: var(--surface); color: var(--ink); max-width: 100%; }
+table.grid.tpl-table td:last-child { width: 40%; }
+.tpl-h { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; white-space: nowrap; }
+.tpl-h input { width: 58px; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; font: inherit; background: var(--surface); color: var(--ink); }
+table.grid.tpl-show td { text-align: right; }
 .pv-tabs { margin: 8px 0; }
 .pv-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 8px 0; }
 .pv-lab { font-size: 12px; font-weight: 600; color: var(--ink-2); }

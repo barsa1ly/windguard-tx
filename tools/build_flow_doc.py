@@ -620,6 +620,7 @@ CODE = [
     ("js/writers.js", "DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop and plain CSV writers"),
     ("js/datasheet.js", "the data sheet: weather source, dates, soil, layers, models; builds the zip"),
     ("js/preview.js", "the data sheet's preview: charts and tables of what a download will hold, before it is saved"),
+    ("js/templates.js", "the layout of your own weather and soil files: tick the columns, choose units, download a template"),
     ("js/practices.js", "practice planner: questions, rules, specifications, species tables"),
     ("js/area.js", "field or area analysis: drawing, boundary files, clipped soils, left-out features, sampling, panel, CSV; "
      "map-click check"),
