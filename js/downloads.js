@@ -7,6 +7,7 @@ WG.downloads = (function () {
 
   /* ---------- sheets ---------- */
   const SHEETS = ["unitsSheet", "figSheet", "dataSheet"];
+  let backTo = null; // the sheet a figure was opened from, shown again when the figure sheet closes
   function open(id) {
     SHEETS.forEach(s => { $("#" + s).hidden = s !== id; });
     $("#sheetBackdrop").hidden = false;
@@ -15,6 +16,8 @@ WG.downloads = (function () {
   }
   function close() {
     if (SHEETS.every(s => $("#" + s).hidden)) return false;
+    if (backTo && !$("#figSheet").hidden) { const b = backTo; backTo = null; open(b); return true; }
+    backTo = null;
     SHEETS.forEach(s => { $("#" + s).hidden = true; });
     $("#sheetBackdrop").hidden = true;
     return true;
@@ -52,6 +55,10 @@ WG.downloads = (function () {
     chCal: { kind: "chart", title: "Monthly erosive hours: measured, reanalysis, calibrated" },
     rose: { kind: "svg", title: "Erosive wind rose" },
   };
+  /* a figure from another sheet: own: it needs no wind analysis; back: the sheet to return to; file, x, sub and table:
+     its file name, the name of its first CSV column, its subtitle, and its data when not one row per label */
+  const addFig = (id, f) => { FIG[id] = { kind: "chart", ...f }; };
+  const figName = id => (FIG[id] && FIG[id].file) || id;
   let figId = null;
   const IN = { in: 1, cm: 1 / 2.54, mm: 1 / 25.4 };
 
@@ -70,6 +77,7 @@ WG.downloads = (function () {
   function openFig(id) {
     figId = id;
     const f = FIG[id];
+    backTo = f.back || null;
     $("#figTitle").textContent = `Download: ${f.title}`;
     const formats = f.kind === "chart" ? [["png", "PNG image"], ["tif", "TIFF image"], ["jpg", "JPEG image"], ["csv", "CSV (the data behind it)"]]
       : [["svg", "SVG (vector)"], ["png", "PNG image"], ["tif", "TIFF image"], ["jpg", "JPEG image"], ["csv", "CSV (the data behind it)"]];
@@ -114,7 +122,7 @@ WG.downloads = (function () {
     : (toast(state.wind ? `No wind analysis for this period: ${state.wind.error}.` : "Wait for the wind analysis to finish."), false));
   document.addEventListener("click", e => {
     const b = e.target.closest("[data-fig]");
-    if (b) { e.preventDefault(); if (windReady()) openFig(b.dataset.fig); }
+    if (b) { e.preventDefault(); if ((FIG[b.dataset.fig] && FIG[b.dataset.fig].own) || windReady()) openFig(b.dataset.fig); }
     const c = e.target.closest("[data-csv]");
     if (c) { e.preventDefault(); downloadTable(c.dataset.csv); }
   });
@@ -168,8 +176,8 @@ WG.downloads = (function () {
 
   $("#figGo").addEventListener("click", async () => {
     const id = figId, f = FIG[id], fmtSel = $("#figFormat").value;
-    if (!id || !windReady()) return; // the analysis went (a reload) or has no usable month while the sheet was open
-    const title = $("#figTitleOn").checked ? f.title : "", sub = $("#figSubOn").checked ? siteLine() : "";
+    if (!id || !(f.own || windReady())) return; // the analysis went (a reload) or has no usable month while the sheet was open
+    const title = $("#figTitleOn").checked ? f.title : "", sub = $("#figSubOn").checked ? f.sub || siteLine() : "";
     const btn = $("#figGo");
     btn.disabled = true;
     try {
@@ -185,7 +193,7 @@ WG.downloads = (function () {
       const canvas = document.createElement("canvas");
       const chart = Ch.render(id, canvas, { w: d.wIn * 96, h: d.hIn * 96, ratio: d.dpi / 96, fontPx: fontPt * 96 / 72, title, subtitle: sub });
       if (!chart) return toast("Open the Wind tab once so the chart is drawn, then try again.");
-      try { X.save(await encode(canvas, fmtSel, d.dpi), `${baseName(id)}_${d.dpi}dpi.${fmtSel}`); } finally { chart.destroy(); }
+      try { X.save(await encode(canvas, fmtSel, d.dpi), `${baseName(figName(id))}_${d.dpi}dpi.${fmtSel}`); } finally { chart.destroy(); }
     } catch (e) {
       console.error(e);
       toast(`Could not make the file: ${e.message || e}`);
@@ -201,8 +209,9 @@ WG.downloads = (function () {
   function downloadTable(key) {
     const w = state.wind;
     if (FIG[key] && FIG[key].kind === "chart") {
-      const t = Ch.table(key);
-      return t ? csvSave(key, ["Month or year", ...t.header.slice(1)], t.rows) : toast("Open the Wind tab once so the chart is drawn.");
+      const f = FIG[key], t = f.table ? f.table() : Ch.table(key);
+      if (f.table) return csvSave(figName(key), t.header, t.rows);
+      return t ? csvSave(figName(key), [f.x || "Month or year", ...t.header.slice(1)], t.rows) : toast("Open the Wind tab once so the chart is drawn.");
     }
     if (key === "rose") {
       if (!windReady()) return;
@@ -247,5 +256,5 @@ WG.downloads = (function () {
     csvSave(t.name, t.header, t.rows);
   }
 
-  return { open, close, renderUnits, openFig, downloadTable, summary, baseName, csvSave, siteLine };
+  return { open, close, renderUnits, openFig, addFig, downloadTable, summary, baseName, csvSave, siteLine };
 })();

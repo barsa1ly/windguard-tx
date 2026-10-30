@@ -619,6 +619,7 @@ CODE = [
     ("js/models.js", "weather and soil structures for model files, your weather and soil files, soil re-layering, zip"),
     ("js/writers.js", "DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop and plain CSV writers"),
     ("js/datasheet.js", "the data sheet: weather source, dates, soil, layers, models; builds the zip"),
+    ("js/preview.js", "the data sheet's preview: charts and tables of what a download will hold, before it is saved"),
     ("js/practices.js", "practice planner: questions, rules, specifications, species tables"),
     ("js/area.js", "field or area analysis: drawing, boundary files, clipped soils, left-out features, sampling, panel, CSV; "
      "map-click check"),
@@ -651,7 +652,8 @@ STEPS = [
      "Changing the period, the model or the calibration station downloads again."),
     ("Downloads.", " Every chart can be saved as PNG, TIFF or JPEG at a chosen size and DPI, or as CSV. The data sheet "
      "reads daily weather for the chosen dates (gridMET, NASA POWER or your file), takes the survey soil or yours, and "
-     "writes files for DSSAT, SWAT+, EPIC, APEX, APSIM and AquaCrop into one zip (section 8)."),
+     "writes files for DSSAT, SWAT+, EPIC, APEX, APSIM and AquaCrop into one zip (section 8). Its Preview button draws all of "
+     "that as charts and tables first, with nothing saved."),
 ]
 
 LIMITS = [

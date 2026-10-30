@@ -297,5 +297,5 @@ WG.charts = (function () {
     ids.forEach(id => { if (charts[id]) charts[id].destroy(); delete charts[id]; delete builders[id]; });
   }
 
-  return { season, speeds, water, trend, rose, roseSVG, gauge, gaugeSVG, calib, resizeAll, render, table, clear, has: id => !!builders[id], C };
+  return { draw, season, speeds, water, trend, rose, roseSVG, gauge, gaugeSVG, calib, resizeAll, render, table, clear, has: id => !!builders[id], C };
 })();

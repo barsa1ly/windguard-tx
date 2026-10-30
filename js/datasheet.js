@@ -48,6 +48,7 @@ WG.datasheet = (function () {
   function layerInfo() {
     const box = $("#dlLayerInfo");
     if (!box) return;
+    checkStale();
     const mode = $("#dlLayers").value;
     $("#dlDepthBox").hidden = mode !== "custom";
     if (mode === "model") { box.textContent = "DSSAT splits the horizons at 5, 15, 30, 45, 60, 90 … cm and APSIM uses 15, 15, 30, 30 … cm layers; AquaCrop merges them to 5, APEX to 10 and EPIC to 15; SWAT+ and the tables keep the horizons."; return; }
@@ -155,7 +156,12 @@ WG.datasheet = (function () {
         <h4>Tables and series (CSV)</h4>
         <div class="model-grid">${SERIES.map(([k, n]) => `<label><input type="checkbox" name="dlSeries" value="${k}"><span>${esc(n)}</span></label>`).join("")}</div>
       </section>
-      <div class="area-actions"><button class="btn primary" id="dlGo">Download</button><span class="fine dl-status" id="dlStatus"></span></div>`;
+      <div class="area-actions"><button class="btn" id="dlPv">Preview</button><button class="btn primary" id="dlGo">Download</button><span class="fine dl-status" id="dlStatus"></span></div>
+      <section class="data-sec" id="dlPvSec" hidden><h4>Preview: what the download will hold</h4>
+        <p class="fine dl-status" id="dlPvStale" hidden>You changed something since this preview. <button class="link" id="dlPvAgain">Preview again</button></p>
+        <div id="dlPvBox"></div>
+        <div class="area-actions"><button class="btn primary" id="dlGo2">Download these files</button></div>
+      </section>`;
     // switching to the file takes its dates; the units are applied when the files are made, so they need no re-read here
     $("#dlWx").addEventListener("change", e => { const f = e.target.value === "file"; $("#dlWxFile").hidden = !f; if (f && userWx) fileDates(); dateLimits(); });
     $("#uFill").addEventListener("change", dateLimits);
@@ -165,7 +171,8 @@ WG.datasheet = (function () {
     $("#dlLayers").addEventListener("change", layerInfo);
     $("#dlDepths").addEventListener("input", layerInfo);
     $$("[data-depths]").forEach(b => b.addEventListener("click", () => { $("#dlDepths").value = depthText(b.dataset.depths.split(",").map(Number)); layerInfo(); keepForm(); }));
-    $("#dlGo").addEventListener("click", go);
+    ["#dlGo", "#dlGo2"].forEach(s => $(s).addEventListener("click", () => run(build)));
+    ["#dlPv", "#dlPvAgain"].forEach(s => $(s).addEventListener("click", () => run(preview)));
     // put back what the user chose last time; dates and soil only for the same location
     const same = !!form && form.site === siteKey();
     if (form) {
@@ -188,9 +195,34 @@ WG.datasheet = (function () {
     if (!gmAsked) { gmAsked = true; Wd.gridmetLast().then(v => { gmLast = v; dateLimits(); }).catch(() => {}); }
     layerInfo();
     if (running) {
-      $("#dlGo").disabled = true;
+      busy(true);
       $("#dlStatus").textContent = running.tok === state.token ? running.text : "Finishing the download for the previous location: it stops without saving.";
     }
+    // the last preview stays until another location is chosen
+    if (previewed && previewed.tok !== state.token) { previewed = null; WG.preview.clear(); }
+    if (previewed) showPreview();
+  }
+  const busy = on => ["#dlGo", "#dlGo2", "#dlPv", "#dlPvAgain"].forEach(s => { if ($(s)) $(s).disabled = on; });
+
+  /* ---------- the preview ---------- */
+  let previewed = null; // { tok, key, job } of the preview on show
+  // everything that changes what a download holds
+  const formKey = () => JSON.stringify([$$("input[name=dlModel]:checked").map(i => i.value), $$("input[name=dlSeries]:checked").map(i => i.value),
+    $("#dlWx").value, $("#dlFrom").value, $("#dlTo").value, $("#dlSoil").value, $("#dlLayers").value, $("#dlLayers").value === "custom" ? $("#dlDepths").value : "",
+    ...(userWxSrc && $("#dlWx").value === "file" ? [userWxSrc.name, userWxSrc.text.length, wxUnits(), $("#uFill").checked] : []),
+    ...($("#dlSoil").value === "user" ? [userSoilRows, userSoilRows && userSoilRows.meta] : []),
+    UN.all()]);
+  // the wind series a preview drew, if it drew any, is still the one in use
+  const sameWind = j => !(j.series.some(k => ["hourly", "monthly", "annual"].includes(k)) || j.models.some(m => m === "epic" || m === "apex")) || j.ctx.analysis === windNow().analysis;
+  function checkStale() {
+    if (previewed && $("#dlPvStale")) $("#dlPvStale").hidden = previewed.key === formKey() && sameWind(previewed.job);
+  }
+  function showPreview(scroll) {
+    if (!$("#dlPvSec")) return;
+    $("#dlPvSec").hidden = false;
+    WG.preview.show($("#dlPvBox"), previewed.job);
+    checkStale();
+    if (scroll) $("#dlPvSec").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   /* ---------- the user's weather ---------- */
@@ -388,32 +420,44 @@ WG.datasheet = (function () {
     return n;
   }
 
+  /* the last weather and climate reads: Download after Preview reads nothing twice. Writers never change them. */
+  let wxKept = null, climKept = null;
+  async function keptWeather(job, status) {
+    const key = JSON.stringify([job.src, job.fill, job.file ? wxUnits() : null, job.site.lat, job.site.lon, job.elev, job.d0, job.d1]);
+    if (wxKept && wxKept.key === key && wxKept.file === (job.file ? userWxSrc : null)) return wxKept.wx;
+    const wx = await chosenWeather(job, status);
+    wxKept = wx.fillError ? null : { key, file: job.file ? userWxSrc : null, wx }; // a failed fill may work next time
+    return wx;
+  }
+
   const STOPPED = new Error("stopped");
   const notWritten = (what, why, more) => `${what} could not be made: ${String(why).replace(/\.$/, "")}.\r\n${more ? `${more}\r\n` : ""}The other files in this zip are complete; README.txt lists them.\r\n`;
-  async function go() {
+  // a Preview or a Download, with the sheet's choices at this moment
+  async function run(action) {
     if (running) return;
     const models = $$("input[name=dlModel]:checked").map(i => i.value), series = $$("input[name=dlSeries]:checked").map(i => i.value);
     if (!models.length && !series.length) return toast("Tick at least one model or table.");
     const a = $("#dlFrom").value, b = $("#dlTo").value;
     if (!a || !b || a > b) return toast("Choose a start date before the end date.");
     running = { tok: state.token, text: "" };
-    $("#dlGo").disabled = true;
+    busy(true);
     const status = t => { running.text = t; $("#dlStatus").textContent = t; };
     status("Working…"); // not the last download's result
     let msg;
-    try { msg = await build(models, series, a, b, status); }
+    try { msg = await action(models, series, a, b, status); }
     catch (e) {
       if (e !== STOPPED) console.error(e);
       msg = e === STOPPED ? "Stopped: another location was chosen while the files were being made, so nothing was saved." : `Could not make the files: ${e.message || e}`;
     }
     running = null;
-    $("#dlGo").disabled = false;
+    busy(false);
     $("#dlStatus").textContent = msg;
     if ($("#dataSheet").hidden) toast(msg, 6000);
   }
-  /* everything the files need is read before the first await, so closing the sheet, opening it again or choosing
-     another location cannot leak into them; another location stops the download */
-  async function build(models, series, a, b, status) {
+  /* everything the files need, up to packing them, for a Preview and a Download alike. It is all read before the first
+     await, so closing the sheet, opening it again or choosing another location cannot leak into it; another location
+     stops it */
+  async function prepare(models, series, a, b, status) {
     const tok = state.token, live = () => { if (state.token !== tok) throw STOPPED; };
     const site = { lat: state.site.lat, lon: state.site.lon, name: state.place || "WindGuard site" }, place = state.place, elev = state.elev ? state.elev.z : null;
     const src = $("#dlWx").value, fill = src === "file" && $("#uFill").checked, windHeight = +$("#uWh").value || 2;
@@ -440,7 +484,7 @@ WG.datasheet = (function () {
     // the wind tables come from the series in use now
     const windTables = series.filter(k => ["hourly", "monthly", "annual"].includes(k)).map(k => tableFile(k, ctx, failed));
 
-    const wx = needWx ? await chosenWeather({ src, fill, file, name: userWxSrc && userWxSrc.name, site, elev, d0, d1 }, status) : null;
+    const wx = needWx ? await keptWeather({ src, fill, file, name: userWxSrc && userWxSrc.name, site, elev, d0, d1 }, status) : null;
     live();
     // days without Tmax and Tmin at either end: the models that cannot read gaps leave them out (their READMEs give the dates)
     let edge = null;
@@ -468,9 +512,11 @@ WG.datasheet = (function () {
         why: short ? "the chosen dates do not cover every month" : `the weather has fewer than 20 days of ${and(gaps.length ? gaps : ["Tmax and Tmin"])} in some months` };
       status(`${cap(clim.why)}: reading 10 complete years of ${clim.src} for ${clim.what}…`);
       try {
-        const y1 = new Date((cs === "gridmet" ? await Wd.gridmetLast() : Wd.today() - 10) * 864e5).getUTCFullYear() - 1;
+        const y1 = new Date((cs === "gridmet" ? await Wd.gridmetLast() : Wd.today() - 10) * 864e5).getUTCFullYear() - 1, some = cs === "gridmet" && !gaps.length;
         clim.years = `${y1 - 9}–${y1}`;
-        climWx = await Wd.dailyWeather(site.lat, site.lon, Wd.epochDay(y1 - 9, 0, 1), Wd.epochDay(y1, 11, 31), cs, elev, cs === "gridmet" && !gaps.length ? ["tmmx", "tmmn"] : null);
+        const key = JSON.stringify([cs, some, site.lat, site.lon, elev, y1]);
+        climWx = climKept && climKept.key === key ? climKept.wx : await Wd.dailyWeather(site.lat, site.lon, Wd.epochDay(y1 - 9, 0, 1), Wd.epochDay(y1, 11, 31), cs, elev, some ? ["tmmx", "tmmn"] : null);
+        climKept = { key, wx: climWx };
       } catch (e) { console.warn("climate statistics", e); climError = e.message || String(e); }
       live();
     }
@@ -501,16 +547,27 @@ WG.datasheet = (function () {
     // nothing to save: a failed climate read is then the reason a second try may work
     if (!n) throw new Error(`${why || "there was nothing to write"}${climError ? `. Reading 10 complete years of ${clim.src} for ${clim.what} failed (${climError}); downloading again may get them` : ""}`);
     files.push({ name: "README.txt", text: readme(ctx, { models, series, moved, edge, clim, climError, notes, failed, windHeight, file }) });
-    status("Packing…");
-    const blob = await M.zip(files);
-    live();
-    X.save(blob, `${D.baseName(`${Wd.isoDay(d0)}_${Wd.isoDay(d1)}`, site, place)}.zip`, "application/zip");
     const warn = [moved && `${moved}.`, edge && gapless.length && `${edge}: the ${and(gapless)} files leave out the other days.`,
       climWx && `${cap(clim.what)} come from 10 complete years of ${clim.src} (${clim.years}), because ${clim.why}.`,
       climError && `${cap(clim.why)}, and reading 10 complete years of ${clim.src} for ${clim.what} failed (${climError}).`,
       wx && wx.fillError && `Gaps could not be filled from gridMET (${wx.fillError}).`, failed.length && `Not written: ${why}.`,
       notes.length && `${notes.length} note${notes.length > 1 ? "s" : ""} from the model files.`].filter(Boolean);
-    return `Done: ${n} file${n === 1 ? "" : "s"}.${warn.length ? ` ${warn.join(" ")} See README.txt.` : ""}`;
+    return { tok, live, ctx, files, n, models, series, notes, failed, site, place, d0, d1, warn, names: MODEL_NAME };
+  }
+  async function build(models, series, a, b, status) {
+    const p = await prepare(models, series, a, b, status);
+    status("Packing…");
+    const blob = await M.zip(p.files);
+    p.live();
+    X.save(blob, `${D.baseName(`${Wd.isoDay(p.d0)}_${Wd.isoDay(p.d1)}`, p.site, p.place)}.zip`, "application/zip");
+    return `Done: ${p.n} file${p.n === 1 ? "" : "s"}.${p.warn.length ? ` ${p.warn.join(" ")} See README.txt.` : ""}`;
+  }
+  async function preview(models, series, a, b, status) {
+    const key = formKey(), p = await prepare(models, series, a, b, status);
+    p.live();
+    previewed = { tok: p.tok, key, job: p };
+    showPreview(true);
+    return `Nothing is saved yet: this is what the ${p.files.length} file${p.files.length === 1 ? "" : "s"} will hold.${p.warn.length ? ` ${p.warn.join(" ")}` : ""}`;
   }
   const and = a => (a.length > 1 ? `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}` : a[0]);
   const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
@@ -629,8 +686,7 @@ WG.datasheet = (function () {
   }
 
   // the form is saved as it is filled in, in the units of that moment, so a later change of units converts it correctly
-  $("#dataBody").addEventListener("input", keepForm);
-  $("#dataBody").addEventListener("change", keepForm);
+  ["input", "change"].forEach(t => $("#dataBody").addEventListener(t, () => { keepForm(); checkStale(); }));
   $("#dataBtn").addEventListener("click", () => {
     if (!state.site) return toast("Pick a location on the map first.");
     render();

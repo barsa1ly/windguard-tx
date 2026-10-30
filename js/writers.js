@@ -386,9 +386,7 @@
       s12("hmd.txt", "hmd", k => n3(ok(wx.rh[k]) ? wx.rh[k] / 100 : null)); s12("wnd.txt", "wnd", k => n3(ok(wx.wind10[k]) ? wx.wind10[k] * TO_17 : null));
     }
     if (soil) {
-      // horizons without a survey bulk density are left out, as in the official SWAT+ database; custom layers are the
-      // user's own depths, and always have a thickness-weighted bulk density
-      const all = soilRows(soil), noBd = soil.layering === "custom" ? [] : all.filter(l => l.noBd), L = all.filter(l => !noBd.includes(l));
+      const { L, noBd } = swatLayers(soil);
       if (!L.length) throw new Error(`SWAT+: the survey gives no bulk density for any horizon of ${soil.name}, and SWAT+ soils leave out horizons without one`);
       const name = short(soil.id === "USER" ? `USER_${soil.name}` : soil.id, 20).replace(/ /g, "_") || "WGSOIL";
       const hg = ((soil.hydgrp || "B").trim()[0] || "B").toUpperCase();
@@ -601,6 +599,21 @@
     }
     if (!H.length) throw new Error("the soil has no layers with water retention and bulk density");
     return H;
+  }
+  // horizons without a survey bulk density are left out, as in the official SWAT+ database; custom layers are the
+  // user's own depths, and always have a thickness-weighted bulk density
+  function swatLayers(soil) {
+    const all = soilRows(soil), noBd = soil.layering === "custom" ? [] : all.filter(l => l.noBd);
+    return { L: all.filter(l => !noBd.includes(l)), noBd };
+  }
+  // the layers of a model's soil file (the plain CSV and the soil table list them all), by the functions its writer uses
+  function modelLayers(model, soil) {
+    if (model === "dssat") return dssatLayers(soil);
+    if (model === "apsim") return apsimLayers(soil);
+    if (model === "swatplus") return swatLayers(soil).L;
+    if (model === "epic" || model === "apex") return mergeLayers(soilRows(soil), model === "epic" ? 15 : 10);
+    if (model === "aquacrop") return mergeLayers(soilRows(soil), 5);
+    return soil.layers;
   }
   // "model": each model's usual layering; "survey" and "custom": the layers as given (merged only past a model's limit)
   const ownLayers = soil => soil.layering === "custom" || soil.layering === "survey";
@@ -979,5 +992,5 @@
   };
 
   WG.writerUtil = { fit, fx, baseName, shortName, ymdOf, doyOf, short, ra, wp1Stats, swatWgn, windMonthly, mergeLayers, ok, CRLF, clean, complete, tavAmp, statGaps,
-    co2Of, CO2, soilRows, dssatStation, dssatSoilId, dssatLayers, apsimLayers, aquaClass, aquaCR, fieldLine, williamsK };
+    co2Of, CO2, soilRows, modelLayers, dssatStation, dssatSoilId, dssatLayers, apsimLayers, aquaClass, aquaCR, fieldLine, williamsK };
 })();

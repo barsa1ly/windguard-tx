@@ -172,6 +172,8 @@ WG.methods = (function () {
     ["APSIM soil limits", "SAT ≤ 1 − BD/2.65 − 0.001;&nbsp; AirDry = 0.5 LL15 (top layer);&nbsp; KS = K<sub>sat</sub> × 24 mm/day", "Crop KL 0.06 down to 0.01 with depth, XF 1 (0 below a restrictive layer); initial water at DUL.", "APSIM .apsimx", "ApsimX Soil.Check; apsimx R package", USED],
     ["AquaCrop soil", "CN: A 46 · B 61 · C 72 · D 77;&nbsp; REW = round(10 (FC − WP/2) × 0.04), 0–15;&nbsp; CRa, CRb from the soil class", "FC, WP, SAT in vol %; K<sub>sat</sub> mm/day; gravel 0 (survey water contents are whole-soil).", "AquaCrop .SOL", "AquaCrop 7.3 manual, Tables 2.14d, 2.24s", USED],
     ["USLE K for your own soil (SWAT+)", "K = f<sub>csand</sub> f<sub>cl-si</sub> f<sub>orgc</sub> f<sub>hisand</sub>", "Used when a layer has no survey K; sand, silt, clay %, organic C %.", "SWAT+ soils.sol", "Williams 1995; SWAT theory 4:1.1", USED],
+    ["Preview", "the data the files are written from, drawn: rain and ET₀ as sums per step of the days with data, the rest as means",
+      "Weather by day, month or year; each model's soil layers; the wind series and summaries; the files' first lines. Nothing is saved until Download, which reads nothing twice.", "Data sheet", "App", USED],
     ["Figure files", "pixels = inches × DPI;&nbsp; PNG pHYs, JPEG JFIF density and TIFF resolution tags carry the DPI", "Fonts in points (1 pt = DPI/72 pixels). TIFF: baseline RGB, PackBits.", "Figure downloads", "PNG 3rd ed.; JFIF 1.02; TIFF 6.0", USED],
   ];
 
