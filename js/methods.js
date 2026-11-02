@@ -75,6 +75,8 @@ WG.methods = (function () {
     ["Area share of a WEG or risk class", "share<sub>k</sub> = Σ<sub>points</sub> Σ<sub>components</sub> (pct / 100) · [class = k] &nbsp;/&nbsp; Σ<sub>points</sub> Σ<sub>components</sub> (pct / 100)",
       "About 20,000 stratified random points inside the boundary (seeded, so the same area gives the same answer). Points on a building, a road (within its class half-width) or water, outside Texas, or without soil data are left out; each map unit is split by its component percentages; components without a WEG are reported separately. Acres = share × analysed acres; mean I and E are weighted the same way, with E = I × C / 100 and C from each map unit's climatic-factor area.",
       "Field or area analysis", "App", USED],
+    ["Area grid", "cells from 20 cm up: square, turned, hexagonal or your own;&nbsp; a cell's value = what lies at its centre, or weighted over 25 points in it",
+      "Soil from the map units' components on chosen layers (a layer below the end of a profile is blank), weather as the means of the 4 km or coarser cell around it. Finer cells line up with other grids; they add no detail. GeoTIFF, shapefile, GeoJSON, CSV; UTM or CONUS Albers.", "Field or area analysis", "App; Karney 2011; Snyder 1987", USED],
     ["Road half-widths", "S1100 15 m · S1200 9 m · S1400 5 m · S1630 6 m · S1640 4 m · S1730/S1740/S1750 3 m · S1500 2 m · paths 1.5 m · other 4 m",
       "Census TIGER road class (MTFCC): pavement plus shoulders, measured from the centreline. A point closer than this to a road is “on the road”.", "Area analysis; map-click check", "App", USED],
     ["RWEQ erodible fraction", "EF = (29.09 + 0.31 Sa + 0.17 Si + 0.33 Sa/Cl − 2.59 OM − 0.95 CaCO₃) / 100",

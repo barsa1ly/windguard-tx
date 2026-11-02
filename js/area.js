@@ -410,7 +410,8 @@ WG.area = (function () {
       </tbody></table></div>
       ${r.mu.length > 12 ? `<p class="fine">${r.mu.length - 12} smaller map units not listed (all are in the CSV).</p>` : ""}
       <p class="fine">Estimated from ${fmt(r.N, 0)} stratified random sample points; each map unit is split by its component percentages. Sources: ${srcBits.join("; ")}.</p>
-      <div class="area-actions"><button class="btn" id="areaCsv">Download CSV</button><button class="btn ghost" id="areaClear">Clear area</button></div>`;
+      <div class="area-actions"><button class="btn primary" id="areaGrid">Make a grid of this area…</button><button class="btn" id="areaCsv">Download CSV</button><button class="btn ghost" id="areaClear">Clear area</button></div>`;
+    $("#areaGrid").onclick = () => WG.grid.open(current);
     $("#areaCsv").onclick = csv;
     $("#areaClear").onclick = clear;
   }
@@ -571,5 +572,5 @@ WG.area = (function () {
   // the units table changed: draw the results and the map's tooltips again in the new units
   const rerender = () => { if (current && current.result) { render(); drawLayers(); } };
   UN.on(rerender);
-  return { excludedAt, drawing: () => drawing, open, analyse, rerender };
+  return { excludedAt, drawing: () => drawing, open, analyse, rerender, sda, parseFiles, geojsonPolys, bboxOf, inRings, roadHalf: mtfcc => ROAD_HALF[mtfcc] || 4 };
 })();

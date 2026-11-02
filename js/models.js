@@ -14,6 +14,19 @@ WG.models = (function () {
 
   /* ---------- soil ---------- */
   const fragVol = (w, bd) => (w === null || w <= 0 ? 0 : (100 * w / 2.65) / (w / 2.65 + (100 - w) / (bd || 1.45)));
+  /* a survey component's horizons in the common structure; edits: the edited surface, if any */
+  function surveyLayers(comp, edits = null) {
+    return S.profileLayers(comp, edits).map((l, i) => {
+      const h = comp.horizons[i] || {}, fv = num(h.fragvoltot_r);
+      // > 2 mm by weight of the whole soil: cobbles and stones (frag3to10, fraggt10) plus the gravel the No. 10 sieve holds back
+      const big = (num(h.frag3to10_r) ?? 0) + (num(h.fraggt10_r) ?? 0), pass = num(h.sieveno10_r);
+      const cfWt = pass === null ? big : Math.min(100, big + (100 - big) * Math.max(0, 100 - pass) / 100);
+      return { top: l.top, bot: l.bot, hz: l.hz, texture: l.texture, sand: l.sand, silt: l.silt, clay: l.clay, om: l.om, oc: l.oc, bd: l.bd,
+        ll: l.ll, dul: l.dul, sat: l.sat, awc: l.awc, ksat: l.ksat === null ? null : l.ksat * 10, ph: l.ph, cec: l.cec, caco3: l.caco3,
+        cfWt: r(cfWt, 1), cfVol: fv !== null ? fv : r(fragVol(cfWt, l.bd), 1), ec: l.ec, kw: l.kw, kf: num(h.kffact), srgf: l.srgf, ni: l.ni, sar: l.sar,
+        noBd: num(h.dbthirdbar_r) === null && !(edits && i === 0) };
+    });
+  }
   /* the survey's component (dominant unless cokey) as the common soil structure */
   function surveySoil(state, cokey) {
     const s = state.soil;
@@ -28,16 +41,7 @@ WG.models = (function () {
       edited: !!edits, lat: state.site.lat, lon: state.site.lon, elev: e ? e.z : num(comp.elev_r), slope: site.slope, hydgrp: site.hydgrp, drainage: site.drainage,
       albedo: site.albedo, u: site.u, drainRate: site.drainRate, cn: site.cn, depth: site.depth, texture: layers[0] ? layers[0].texture : "",
       family: comp.taxclname || "", order: comp.taxorder || "", tfact: site.tfact,
-      layers: layers.map((l, i) => {
-        const h = comp.horizons[i] || {}, fv = num(h.fragvoltot_r);
-        // > 2 mm by weight of the whole soil: cobbles and stones (frag3to10, fraggt10) plus the gravel the No. 10 sieve holds back
-        const big = (num(h.frag3to10_r) ?? 0) + (num(h.fraggt10_r) ?? 0), pass = num(h.sieveno10_r);
-        const cfWt = pass === null ? big : Math.min(100, big + (100 - big) * Math.max(0, 100 - pass) / 100);
-        return { top: l.top, bot: l.bot, hz: l.hz, texture: l.texture, sand: l.sand, silt: l.silt, clay: l.clay, om: l.om, oc: l.oc, bd: l.bd,
-          ll: l.ll, dul: l.dul, sat: l.sat, awc: l.awc, ksat: l.ksat === null ? null : l.ksat * 10, ph: l.ph, cec: l.cec, caco3: l.caco3,
-          cfWt: r(cfWt, 1), cfVol: fv !== null ? fv : r(fragVol(cfWt, l.bd), 1), ec: l.ec, kw: l.kw, kf: num(h.kffact), srgf: l.srgf, ni: l.ni, sar: l.sar,
-          noBd: num(h.dbthirdbar_r) === null && !(edits && i === 0) };
-      }),
+      layers: surveyLayers(comp, edits),
     };
   }
   /* rows the user typed (or uploaded): missing water retention, bulk density and Ksat from Saxton & Rawls (2006).
@@ -483,7 +487,7 @@ WG.models = (function () {
   }
   async function zip(files) {
     const Z = await loadZip(), z = new Z();
-    files.forEach(f => z.file(f.name, f.text));
+    files.forEach(f => (f.blob ? z.file(f.name, f.blob, { compression: /\.tif$/.test(f.name) ? "STORE" : "DEFLATE" }) : z.file(f.name, f.text)));
     return z.generateAsync({ type: "blob", compression: "DEFLATE" });
   }
 
@@ -497,5 +501,5 @@ WG.models = (function () {
     document.head.appendChild(s);
   })));
 
-  return { surveySoil, userSoil, SOIL_COLS, soilTemplateCSV, parseSoilCSV, csvRows, parseWeatherCSV, fillGaps, relayer, relayerLayers, zip, loadXlsx, writers: {}, r };
+  return { surveySoil, surveyLayers, userSoil, SOIL_COLS, soilTemplateCSV, parseSoilCSV, csvRows, parseWeatherCSV, fillGaps, relayer, relayerLayers, zip, loadXlsx, writers: {}, r };
 })();

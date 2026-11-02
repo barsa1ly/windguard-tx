@@ -6,7 +6,7 @@ WG.downloads = (function () {
   const state = WG.state;
 
   /* ---------- sheets ---------- */
-  const SHEETS = ["unitsSheet", "figSheet", "dataSheet"];
+  const SHEETS = ["unitsSheet", "figSheet", "dataSheet", "gridSheet"];
   let backTo = null; // the sheet a figure was opened from, shown again when the figure sheet closes
   function open(id) {
     SHEETS.forEach(s => { $("#" + s).hidden = s !== id; });

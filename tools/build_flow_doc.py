@@ -621,6 +621,7 @@ CODE = [
     ("js/datasheet.js", "the data sheet: weather source, dates, soil, layers, models; builds the zip"),
     ("js/preview.js", "the data sheet's preview: charts and tables of what a download will hold, before it is saved"),
     ("js/templates.js", "the layout of your own weather and soil files: tick the columns, choose units, download a template"),
+    ("js/grid.js, js/gridfiles.js", "the area grid: cells from 20 cm up with soil and weather in each; projections, GeoTIFF and shapefile writers"),
     ("js/practices.js", "practice planner: questions, rules, specifications, species tables"),
     ("js/area.js", "field or area analysis: drawing, boundary files, clipped soils, left-out features, sampling, panel, CSV; "
      "map-click check"),
@@ -840,7 +841,7 @@ def build_docx(figs, commit):
     para("Where each dataset comes from, where it is calculated, and how the results reach the screen",
          size=13, color=muted, after=2)
     para(f"App: barsa1ly.github.io/windguard-tx   ·   Code: github.com/barsa1ly/windguard-tx (commit {commit})   ·   "
-         f"October 30, 2026", size=9, color=muted, after=10)
+         f"November 1, 2026", size=9, color=muted, after=10)
 
     doc.add_heading("1. In one paragraph", level=1)
     para("WindGuard TX is a static web page. When you pick a point inside Texas, your browser asks each agency's web "

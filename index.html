@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=31">
+  <link rel="stylesheet" href="css/app.css?v=32">
 </head>
 <body>
 <div id="app" class="app">
@@ -430,6 +430,12 @@
     <div class="sheet-body" id="dataBody"></div>
   </div>
 
+  <!-- ============ AREA GRID SHEET ============ -->
+  <div id="gridSheet" class="sheet wide" role="dialog" aria-label="Make a grid of this area" hidden>
+    <div class="sheet-h"><h3>Make a grid of this area</h3><button class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="sheet-body" id="gridBody"></div>
+  </div>
+
   <!-- ============ AREA ANALYSIS (non-modal: the map stays usable) ============ -->
   <div id="areaSheet" class="sheet area" role="dialog" aria-label="Field or area analysis" hidden>
     <div class="sheet-h"><h3>Field or area analysis</h3><button class="icon-btn" id="areaClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
@@ -457,23 +463,25 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=31"></script>
-<script src="data/stations.js?v=31"></script>
-<script src="js/util.js?v=31"></script>
-<script src="js/units.js?v=31"></script>
-<script src="js/export.js?v=31"></script>
-<script src="js/soil.js?v=31"></script>
-<script src="js/wind.js?v=31"></script>
-<script src="js/charts.js?v=31"></script>
-<script src="js/practices.js?v=31"></script>
-<script src="js/methods.js?v=31"></script>
-<script src="js/app.js?v=31"></script>
-<script src="js/downloads.js?v=31"></script>
-<script src="js/models.js?v=31"></script>
-<script src="js/writers.js?v=31"></script>
-<script src="js/preview.js?v=31"></script>
-<script src="js/templates.js?v=31"></script>
-<script src="js/datasheet.js?v=31"></script>
-<script src="js/area.js?v=31"></script>
+<script src="data/layers.js?v=32"></script>
+<script src="data/stations.js?v=32"></script>
+<script src="js/util.js?v=32"></script>
+<script src="js/units.js?v=32"></script>
+<script src="js/export.js?v=32"></script>
+<script src="js/soil.js?v=32"></script>
+<script src="js/wind.js?v=32"></script>
+<script src="js/charts.js?v=32"></script>
+<script src="js/practices.js?v=32"></script>
+<script src="js/methods.js?v=32"></script>
+<script src="js/app.js?v=32"></script>
+<script src="js/downloads.js?v=32"></script>
+<script src="js/models.js?v=32"></script>
+<script src="js/writers.js?v=32"></script>
+<script src="js/preview.js?v=32"></script>
+<script src="js/templates.js?v=32"></script>
+<script src="js/datasheet.js?v=32"></script>
+<script src="js/area.js?v=32"></script>
+<script src="js/gridfiles.js?v=32"></script>
+<script src="js/grid.js?v=32"></script>
 </body>
 </html>

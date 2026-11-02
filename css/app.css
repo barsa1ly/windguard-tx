@@ -366,6 +366,13 @@ table.grid.tpl-table td:last-child { width: 40%; }
 .tpl-h input { width: 58px; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; font: inherit; background: var(--surface); color: var(--ink); }
 table.grid.tpl-show td { text-align: right; }
 .pv-tabs { margin: 8px 0; }
+.pv-vars label.off { opacity: .45; }
+.grid-canvas { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f1; margin: 6px 0; }
+.grid-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; margin: 4px 0 10px; color: var(--ink-2); }
+.grid-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.grid-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.grid-legend i.grid-ramp { width: 160px; max-width: 40vw; height: 12px; }
+table.grid.pv-table td.l, table.grid.pv-table th.l { text-align: left; white-space: normal; min-width: 200px; }
 .pv-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 8px 0; }
 .pv-lab { font-size: 12px; font-weight: 600; color: var(--ink-2); }
 .pv-lab select { height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; font: inherit; font-weight: 500; background: var(--surface); color: var(--ink); max-width: 100%; }
