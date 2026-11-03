@@ -293,6 +293,14 @@ WG.soil = (function () {
     return row[s < 2 ? 0 : s < 5 ? 1 : s < 10 ? 2 : 3];
   }
 
+  /* bedrock or a cemented pan: a bedrock or cemented texture code (CEM-MAT, BR), or a texture of all zeros with no organic
+     matter, as the survey's CEM-MAT rows have. It holds no fine earth, so Saxton & Rawls has nothing to work on. */
+  const ROCK = new Set(["BR", "WB", "UWB", "CEM", "IND"]);
+  function isRock(h) {
+    const zero = k => num(h[k]) === 0;
+    return ROCK.has(parseTexture(h.texture).base) || (zero("sandtotal_r") && zero("claytotal_r") && !num(h.silttotal_r) && !num(h.om_r));
+  }
+
   /* Build the layer table used in the detailed profile and exports. */
   function profileLayers(comp, surfaceOverride) {
     const restr = comp.restrictions.find(r => num(r.resdept_r) !== null);
@@ -301,18 +309,23 @@ WG.soil = (function () {
       const top = num(h.hzdept_r), bot = num(h.hzdepb_r);
       let sand = num(h.sandtotal_r), clay = num(h.claytotal_r), silt = num(h.silttotal_r), om = num(h.om_r);
       let ph = num(h.ph1to1h2o_r), caco3 = num(h.caco3_r), bd = num(h.dbthirdbar_r);
-      const isTop = i === 0 && surfaceOverride;
+      const isTop = i === 0 && surfaceOverride, rock = !isTop && isRock(h);
       if (isTop) {
         ({ sand, silt, clay, om, ph, caco3 } = { ...{ sand, silt, clay, om, ph, caco3 }, ...surfaceOverride });
       }
-      if (silt === null && sand !== null && clay !== null) silt = 100 - sand - clay;
-      const sr = saxtonRawls(sand, clay, om);
+      if (silt === null && sand !== null && clay !== null && !rock) silt = 100 - sand - clay;
+      const sr = rock ? null : saxtonRawls(sand, clay, om);
       let ll = num(h.wfifteenbar_r), dul = num(h.wthirdbar_r), sat = num(h.wsatiated_r);
+      // in rock a water content or bulk density of zero means none (the survey's own positive values are kept)
+      if (rock) { ll = ll || null; dul = dul || null; sat = sat || null; bd = bd || null; }
       ll = ll !== null && !isTop ? ll / 100 : sr ? sr.ll : null;
       dul = dul !== null && !isTop ? dul / 100 : sr ? sr.dul : null;
       if (bd === null || isTop) bd = isTop && sr ? sr.bd : bd ?? (sr ? sr.bd : null);
       sat = sat !== null && !isTop ? sat / 100 : sr ? sr.sat : bd ? 1 - bd / 2.65 : null;
       if (sat !== null && dul !== null) sat = Math.max(sat, dul + 0.01); // DSSAT requires SAT > DUL
+      // a surface with edited sand, silt or clay is the texture they make; the survey's code stays if the family is the same, or if only pH or OM changed
+      const edited3 = isTop && (sand !== num(h.sandtotal_r) || silt !== num(h.silttotal_r) || clay !== num(h.claytotal_r));
+      const base = parseTexture(h.texture).base, made = edited3 ? refineCode(textureClass(sand, silt, clay), base) : null, retextured = !!made && made !== base;
       const ksatUm = num(h.ksat_r);
       const ksat = ksatUm !== null && !isTop ? ksatUm * 0.36 : sr ? sr.ksat / 10 : null; // cm/h
       const mid = top !== null && bot !== null ? (top + bot) / 2 : null;
@@ -322,9 +335,9 @@ WG.soil = (function () {
       const cf = sieve !== null ? Math.max(0, 100 - sieve) : (num(h.frag3to10_r) ?? 0) + (num(h.fraggt10_r) ?? 0);
       const oc = om !== null ? om / 1.724 : null;
       return {
-        hz: h.hzname || "", top, bot, texture: h.texture || "", texdesc: h.texdesc || "",
-        sand, silt, clay, vfs: num(h.sandvf_r), om, oc, bd, ll, dul, sat,
-        awc: num(h.awc_r) ?? (dul !== null && ll !== null ? dul - ll : null),
+        hz: h.hzname || "", top, bot, texture: retextured ? made : h.texture || "", texdesc: retextured ? TEX[made] || "" : h.texdesc || "",
+        sand, silt, clay, vfs: isTop && sand !== num(h.sandtotal_r) ? null : num(h.sandvf_r), om, oc, bd, ll, dul, sat,
+        awc: (isTop ? null : num(h.awc_r)) ?? (dul !== null && ll !== null ? dul - ll : null),
         ksat, ph, cec: num(h.cec7_r) ?? num(h.ecec_r), caco3, gypsum: num(h.gypsum_r), ec: num(h.ec_r), sar: num(h.sar_r),
         kw: num(h.kwfact), cf, srgf, ni: oc !== null ? Math.min(oc / 10, 0.5) : null, lep: num(h.lep_r),
         edited: !!isTop,

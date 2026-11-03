@@ -83,26 +83,42 @@ WG.downloads = (function () {
       : [["svg", "SVG (vector)"], ["png", "PNG image"], ["tif", "TIFF image"], ["jpg", "JPEG image"], ["csv", "CSV (the data behind it)"]];
     $("#figFormat").innerHTML = formats.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
     $("#figPreset").value = "screen";
+    figUnitWas = $("#figUnit").value;
     applyPreset();
     open("figSheet");
   }
+  // the unit the size boxes are in, and their size in it unrounded: the boxes show it rounded, so a size switched to
+  // another unit and back is the size typed (90 mm, not 89.92)
+  let figUnitWas = null, figSize = null;
+  function showSize(w, h, unit) {
+    figSize = { w, h };
+    $("#figW").value = +w.toFixed(unit === "px" ? 0 : 2);
+    $("#figH").value = +h.toFixed(unit === "px" ? 0 : 2);
+  }
   function applyPreset() {
-    const p = $("#figPreset").value, unit = $("#figUnit").value;
+    const p = $("#figPreset").value, unit = $("#figUnit").value, was = figUnitWas, dpi = +$("#figDpi").value;
+    figUnitWas = unit;
     let w, h;
     if (p === "screen") ({ w, h } = screenSize(figId));
     else if (p !== "custom") [w, h] = p.split("x").map(Number);
-    if (p === "custom") return info();
+    if (p === "custom") {
+      // the same size in the new unit: 90 x 60 mm is 3.54 x 2.36 in
+      if (was && was !== unit) {
+        const s = figSize || { w: +$("#figW").value, h: +$("#figH").value }, k = (was === "px" ? 1 / dpi : IN[was]) * (unit === "px" ? dpi : 1 / IN[unit]);
+        showSize(s.w * k, s.h * k, unit);
+      }
+      return info();
+    }
     if (FIG[figId] && FIG[figId].kind === "svg" && p !== "screen") h = (w * roseHeight(Ch.roseSVG(state.wind))) / 300 * ($("#figTitleOn").checked ? 1.12 : 1);
     const k = unit === "px" ? +$("#figDpi").value : 1 / IN[unit];
-    $("#figW").value = +(w * k).toFixed(unit === "px" ? 0 : 2);
-    $("#figH").value = +(h * k).toFixed(unit === "px" ? 0 : 2);
+    showSize(w * k, h * k, unit);
     info();
   }
   /* requested size in inches, the pixel size and the DPI */
   function dims() {
     const unit = $("#figUnit").value, dpi = +$("#figDpi").value;
     const toIn = v => (unit === "px" ? v / dpi : v * IN[unit]);
-    const wIn = toIn(+$("#figW").value || 0), hIn = toIn(+$("#figH").value || 0);
+    const s = figSize || { w: +$("#figW").value, h: +$("#figH").value }, wIn = toIn(s.w || 0), hIn = toIn(s.h || 0);
     return { wIn, hIn, dpi, px: [Math.round(wIn * dpi), Math.round(hIn * dpi)] };
   }
   function info() {
@@ -115,7 +131,12 @@ WG.downloads = (function () {
           + (mp > 60 ? " This is very large; your browser may run out of memory." : "");
   }
   ["#figPreset", "#figUnit"].forEach(s => $(s).addEventListener("change", applyPreset));
-  ["#figW", "#figH"].forEach(s => $(s).addEventListener("input", () => { $("#figPreset").value = "custom"; info(); }));
+  // a typed value is the size from now on, as typed; the other box keeps its own
+  ["#figW", "#figH"].forEach(s => $(s).addEventListener("input", () => {
+    $("#figPreset").value = "custom";
+    figSize = { w: +$("#figW").value, h: +$("#figH").value, ...figSize, [s === "#figW" ? "w" : "h"]: +$(s).value };
+    info();
+  }));
   ["#figDpi", "#figFormat", "#figFont"].forEach(s => $(s).addEventListener("change", () => ($("#figUnit").value === "px" ? applyPreset() : info())));
   // a wind analysis to draw from, or a toast saying why there is none
   const windReady = () => (state.wind && !state.wind.error ? true

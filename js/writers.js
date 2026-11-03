@@ -34,23 +34,30 @@
   const isoSpan = wx => `${Wd.isoDay(wx.days[0])} to ${Wd.isoDay(wx.days[wx.days.length - 1])}`;
   /* values no station reports are taken as missing in every model file: an undeclared missing-value code (-99.9,
      -996 ...) shows up as negative rain, radiation, humidity, vapour pressure or wind, radiation above 50 MJ/m2 or a
-     temperature outside -60...60 degC, and a day with Tmax = Tmin = 0 is an empty row. w.bad counts them by variable
-     (2 m wind with the 10 m wind it comes from). */
-  const LIMITS = [["tmax", -60, 60], ["tmin", -60, 60], ["tdew", -60, 60], ["srad", 0, 50], ["prcp", 0, Infinity], ["rh", 0, Infinity], ["vp", 0, Infinity],
+     temperature outside -60...60 degC; a stuck sensor as radiation below 0.1 MJ/m2 (the floor CSM resets it to) or
+     humidity or vapour pressure of 0; and a day with Tmax = Tmin = 0 is an empty row, so the zeros in its other columns
+     go too. w.bad counts them by variable (2 m wind with the 10 m wind it comes from). */
+  const LIMITS = [["tmax", -60, 60], ["tmin", -60, 60], ["tdew", -60, 60], ["srad", 0.1, 50], ["prcp", 0, Infinity], ["rh", 1e-9, Infinity], ["vp", 1e-9, Infinity],
     ["wind10", 0, Infinity], ["wind2", 0, Infinity]];
+  const EMPTY_ROW = ["srad", "prcp", "rh", "rhmax", "rhmin", "tdew", "vp", "wind10", "wind2", "et0"];
   function clean(wx) {
     if (!wx || wx.bad) return wx;
     const w = { ...wx }, bad = {}, count = k => { bad[k] = (bad[k] || 0) + 1; };
-    LIMITS.forEach(([k]) => { if (Array.isArray(wx[k])) w[k] = wx[k].slice(); });
+    [...LIMITS.map(x => x[0]), ...EMPTY_ROW].forEach(k => { if (Array.isArray(wx[k])) w[k] = wx[k].slice(); });
     w.days.forEach((_, i) => {
-      if (w.tmax && w.tmin && w.tmax[i] === 0 && w.tmin[i] === 0) { w.tmax[i] = w.tmin[i] = null; count("zero"); }
+      if (w.tmax && w.tmin && w.tmax[i] === 0 && w.tmin[i] === 0) {
+        w.tmax[i] = w.tmin[i] = null; count("zero");
+        const zeros = EMPTY_ROW.filter(k => w[k] && w[k][i] === 0);
+        zeros.forEach(k => { w[k][i] = null; });
+        if (zeros.length) count("zeroRest");
+      }
       LIMITS.forEach(([k, lo, hi]) => { const v = w[k] && w[k][i]; if (ok(v) && (v < lo || v > hi)) { w[k][i] = null; if (k !== "wind2") count(k); } });
     });
     w.bad = bad;
     return w;
   }
-  const BAD = { zero: "Tmax = Tmin = 0", tmax: "Tmax outside -60 to 60 degC", tmin: "Tmin outside -60 to 60 degC", tdew: "dew point outside -60 to 60 degC",
-    srad: "solar radiation below 0 or above 50 MJ/m2", prcp: "negative rain", rh: "negative humidity", vp: "negative vapour pressure", wind10: "negative wind" };
+  const BAD = { zero: "Tmax = Tmin = 0", zeroRest: "the zeros in the other columns of those rows", tmax: "Tmax outside -60 to 60 degC", tmin: "Tmin outside -60 to 60 degC", tdew: "dew point outside -60 to 60 degC",
+    srad: "solar radiation below 0.1 or above 50 MJ/m2", prcp: "negative rain", rh: "humidity of 0 or below", vp: "vapour pressure of 0 or below", wind10: "negative wind" };
   const badText = w => {
     const e = Object.entries((w && w.bad) || {});
     return e.length ? `Values no station reports were taken as missing: ${e.map(([k, c]) => `${BAD[k] || k} ${c} day${c > 1 ? "s" : ""}`).join("; ")}.` : "";
@@ -63,22 +70,25 @@
   const byMonth = (wx, k) => { const a = Array.from({ length: 12 }, () => []); wx.days.forEach((d, i) => { const v = wx[k] && wx[k][i]; if (ok(v)) a[months(d)].push(v); }); return a; };
   /* monthly rain statistics for a wet-day test. Totals and wet days are per whole month from the days with data, so a
      month split between two years or with gaps counts in full; wet-after-dry and wet-after-wet days (the day before
-     may be in the month before); each year's largest daily rain from the years in which the month is complete (all
-     years with the month when none is) */
+     may be in the month before) over the dry and wet days whose day before has data, so gaps do not lower them (with
+     no such day, the month's share of wet days); each year's largest daily rain from the years in which the month is
+     complete (all years with the month when none is) */
   function rainStats(wx, wet) {
-    const acc = Array.from({ length: 12 }, () => ({ all: [], wets: [], nwd: 0, nww: 0, n: new Map(), max: new Map() }));
+    const acc = Array.from({ length: 12 }, () => ({ all: [], wets: [], nwd: 0, nww: 0, gapDry: 0, gapWet: 0, n: new Map(), max: new Map() }));
     wx.days.forEach((d, i) => {
       const p = wx.prcp[i], q = i ? wx.prcp[i - 1] : null;
       if (!ok(p)) return;
-      const [y, mo] = ymdOf(d), a = acc[mo - 1];
+      const [y, mo] = ymdOf(d), a = acc[mo - 1], w = wet(p);
       a.all.push(p);
-      if (wet(p)) { a.wets.push(p); if (ok(q)) a[wet(q) ? "nww" : "nwd"]++; }
+      if (w) a.wets.push(p);
+      if (ok(q)) { if (w) a[wet(q) ? "nww" : "nwd"]++; } else if (i) a[w ? "gapWet" : "gapDry"]++;
       a.n.set(y, (a.n.get(y) || 0) + 1); a.max.set(y, Math.max(a.max.get(y) ?? 0, p));
     });
     return acc.map((a, m) => {
-      const n = a.all.length, per = n ? MONTH_DAYS[m] / n : 0, ndry = n - a.wets.length;
+      const n = a.all.length, per = n ? MONTH_DAYS[m] / n : 0, ndry = n - a.wets.length, nwet = a.wets.length;
+      const dk = ndry - a.gapDry, wk = nwet - a.gapWet, share = n ? nwet / n : 0;
       const full = [...a.n].filter(([y, c]) => c === new Date(Date.UTC(y, m + 1, 0)).getUTCDate()).map(([y]) => a.max.get(y));
-      return { all: a.all, wets: a.wets, total: sum(a.all) * per, wetDays: a.wets.length * per, pwd: ndry ? a.nwd / ndry : 0, pww: a.wets.length ? a.nww / a.wets.length : 0,
+      return { all: a.all, wets: a.wets, total: sum(a.all) * per, wetDays: nwet * per, pwd: dk ? Math.min(1, a.nwd / dk) : ndry ? share : 0, pww: wk ? Math.min(1, a.nww / wk) : nwet ? share : 0,
         maxima: full.length ? full : [...a.max.values()], years: full.length || a.max.size };
     });
   }
@@ -211,11 +221,14 @@
   /* soil: one row per property, one F8 column per layer (EPIC up to 15 layers, APEX up to 10) */
   function mergeLayers(layers, max) {
     const L = layers.map(l => ({ ...l }));
-    while (L.length > max) { // merge the thinnest adjacent pair below the surface layer, thickness-weighted (Ksat harmonic)
+    while (L.length > max) { // merge the thinnest adjacent pair below the surface layer, thickness-weighted (Ksat harmonic;
+      // organic matter, carbon, CaCO3 and N, fractions of the fine earth by mass, by bulk density x thickness where both have one)
       let best = 1, bt = Infinity;
       for (let i = 1; i < L.length - 1; i++) { const t = (L[i].bot - L[i].top) + (L[i + 1].bot - L[i + 1].top); if (t < bt) { bt = t; best = i; } }
       const a = L[best], b = L[best + 1], wa = a.bot - a.top, wb = b.bot - b.top;
-      const mix = k => (ok(a[k]) && ok(b[k]) ? (k === "ksat" ? (wa + wb) / (wa / Math.max(a[k], 1e-6) + wb / Math.max(b[k], 1e-6)) : (a[k] * wa + b[k] * wb) / (wa + wb)) : ok(a[k]) ? a[k] : b[k]);
+      const byMass = ok(a.bd) && ok(b.bd) && a.bd > 0 && b.bd > 0, ma = byMass ? wa * a.bd : wa, mb = byMass ? wb * b.bd : wb;
+      const mix = k => (ok(a[k]) && ok(b[k]) ? (k === "ksat" ? (wa + wb) / (wa / Math.max(a[k], 1e-6) + wb / Math.max(b[k], 1e-6))
+        : ["om", "oc", "caco3", "ni"].includes(k) ? (a[k] * ma + b[k] * mb) / (ma + mb) : (a[k] * wa + b[k] * wb) / (wa + wb)) : ok(a[k]) ? a[k] : b[k]);
       const m = { ...a, bot: b.bot, hz: [...new Set([a.hz, b.hz].join("+").split("+").filter(Boolean))].join("+") };
       // every property either layer has (a value only the deeper layer has is kept too)
       new Set([...Object.keys(a), ...Object.keys(b)]).forEach(k => { if ((ok(a[k]) || ok(b[k])) && !["top", "bot"].includes(k)) m[k] = mix(k); });
@@ -223,15 +236,42 @@
     }
     return L;
   }
+  const fine = (v, l) => (ok(v) ? v / Math.max(0.05, 1 - (l.cfVol || 0) / 100) : 0); // whole-soil water content to fine earth
+  /* both models take clay as 100 - sand - silt, so a layer written without them would be all clay. What is missing is
+     what its clay leaves, split between sand and silt as in the nearest layer with both (evenly if none has them); a
+     layer without clay takes that layer's sand and silt too (loam, 40 and 40, if none has them) */
+  function sandSilt(L) {
+    const both = L.map((l, i) => [l, i]).filter(([l]) => ok(l.sand) && ok(l.silt));
+    return L.map((l, i) => {
+      if (ok(l.sand) && ok(l.silt)) return l;
+      const n = both.length ? both.reduce((a, b) => (Math.abs(b[1] - i) < Math.abs(a[1] - i) ? b : a))[0] : { sand: 40, silt: 40 };
+      const rest = Math.max(0, ok(l.clay) ? 100 - l.clay : n.sand + n.silt);
+      if (ok(l.sand)) return { ...l, silt: Math.max(0, rest - l.sand) };
+      if (ok(l.silt)) return { ...l, sand: Math.max(0, rest - l.silt) };
+      const part = n.sand + n.silt > 0 ? n.sand / (n.sand + n.silt) : 0.5;
+      return { ...l, sand: rest * part, silt: rest * (1 - part) };
+    });
+  }
+  // what solText changed in the soil's values, for the README and the data sheet
+  function solNotes(L, model) {
+    const at = a => `${and(a.map(l => `${cm1(l.top)}-${cm1(l.bot)}`))} cm layer${a.length > 1 ? "s" : ""}`;
+    const noTex = L.filter(l => !ok(l.sand) || !ok(l.silt)), tight = L.filter(l => fine(l.dul, l) < fine(l.ll, l) + 0.01);
+    return [noTex.length ? `The ${at(noTex)} ${noTex.length > 1 ? "have" : "has"} no sand and silt in the data, and ${model} takes clay as 100 - sand - silt, which would make ${noTex.length > 1 ? "them" : "it"} all clay. So they come from the nearest layer with both: in its proportions after the layer's own clay, or as they are where the clay is missing too.` : "",
+      tight.length ? `The ${at(tight)} ${tight.length > 1 ? "have" : "has"} a field capacity less than 0.01 above the wilting point. ${model} divides by the difference, so it is written as the wilting point + 0.01.` : ""];
+  }
+  /* each layer's values as solText writes them (missing stays null: the file has 0), also for the data sheet's
+     preview; clay is not written, as the model takes it as 100 - sand - silt */
+  const epicLayers = (soil, kind) => sandSilt(mergeLayers(soilRows(soil), kind === "epic" ? 15 : 10)).map(l => ({ top: l.top, bot: l.bot, hz: l.hz, bd: l.bd,
+    ll: fine(l.ll, l), dul: Math.max(fine(l.dul, l), fine(l.ll, l) + 0.01), sand: l.sand, silt: l.silt, clay: 100 - l.sand - l.silt, ph: ok(l.ph) ? l.ph : 7,
+    oc: ok(l.om) ? l.om / 1.72 : l.oc, caco3: l.caco3, cec: l.cec, cfVol: l.cfVol, ksat: l.ksat, ec: l.ec }));
   function solText(soil, kind) {
-    const L = mergeLayers(soilRows(soil), kind === "epic" ? 15 : 10);
+    const L = epicLayers(soil, kind);
     const f8 = v => fit(ok(v) ? v : 0, 8, ok(v) && Math.abs(v) < 10 ? 3 : 2);
     const hsg = { A: 1, B: 2, C: 3, D: 4 }[(soil.hydgrp || "C")[0]] || 3;
     const salb = Math.max(0.01, (ok(soil.albedo) ? soil.albedo : 0.15) * 0.625); // moist albedo from SSURGO's dry albedo (GeoEPIC)
-    const fine = (v, l) => (ok(v) ? v / Math.max(0.05, 1 - (l.cfVol || 0) / 100) : 0); // whole-soil water content to fine earth
     const rows = [
-      L.map(l => l.bot / 100), L.map(l => l.bd), L.map(l => fine(l.ll, l)), L.map(l => fine(l.dul, l)), L.map(l => l.sand), L.map(l => l.silt),
-      L.map(() => 0), L.map(l => (ok(l.ph) ? l.ph : 7)), L.map(() => 0), L.map(l => (ok(l.om) ? l.om / 1.72 : l.oc)), L.map(l => l.caco3), L.map(l => l.cec),
+      L.map(l => l.bot / 100), L.map(l => l.bd), L.map(l => l.ll), L.map(l => l.dul), L.map(l => l.sand), L.map(l => l.silt),
+      L.map(() => 0), L.map(l => l.ph), L.map(() => 0), L.map(l => l.oc), L.map(l => l.caco3), L.map(l => l.cec),
       L.map(l => l.cfVol), L.map(() => 0), L.map(() => 0), L.map(() => 0), L.map(() => 0), L.map(() => 0), L.map(l => l.ksat), L.map(() => 0),
       L.map(() => 0), L.map(() => 0), L.map(l => l.ec),
     ]; // lines 4-26: Z BD U FC SAN SIL WON PH SMB WOC CAC CEC ROK CNDS PKRZ RSD BDD PSP SATC HCL WP EXCK ECND
@@ -268,33 +308,36 @@
         notes.push(...[gone, badText(wx)].filter(Boolean), ...sn);
       }
       if (soil) {
-        const H = soilRows(soil), max = E ? 15 : 10;
+        const H = soilRows(soil), max = E ? 15 : 10, L = mergeLayers(H, max);
         files.push({ name: `${b}.SOL`, text: solText(soil, kind) });
-        lay = layering(soil, `${b}.SOL`, mergeLayers(H, max), hzOf(soil), H.length > max ? mergedText(model, max, H.length) : "");
+        lay = layering(soil, `${b}.SOL`, L, hzOf(soil), [H.length > max ? mergedText(model, max, H.length) : "", ...solNotes(L, model), omBlank(soil, `WOC is 0, which ${model} works out for itself`)]);
         notes.push(...lay.notes);
       }
+      // the README names only the files in this zip: the weather files, the soil file, or both
       const ll = `${site.lat.toFixed(2).padStart(8)}${site.lon.toFixed(2).padStart(8)}${(site.elev ?? 0).toFixed(1).padStart(8)}`;
+      const sub = and([soil ? "INPS = 901 (soil)" : "", wx ? "IWTH = 901 (daily weather)" : ""].filter(Boolean));
       files.push({ name: "README.txt", text: [
         `${E ? "EPIC 1102" : "APEX 1501"} files from WindGuard TX for ${site.name} (${site.lat.toFixed(5)}, ${site.lon.toFixed(5)}).`,
         `File names: W + the latitude and longitude (to 0.001 degree) packed into 7 letters and digits, because ${model} wants 8.3 file names.`,
-        "", `${b}.DLY  daily weather: year month day, solar MJ/m2, Tmax and Tmin degC, precipitation mm, RH fraction, wind m/s at 10 m (2X,3I4,6F6.2; no header).`,
-        `        Feb 29 is included: set LPYR = 0 (${E ? "EPICCONT" : "APEXCONT"} line 1 field 9). NGN = 2345 reads every variable (line 1 field 6).`,
-        `        Missing values: ${E ? "999.0 (generated by the model)" : "blank for solar, RH and wind; 9999.0 for Tmax, Tmin and rain (generated by the model)"}.`,
+        "", wx ? `${b}.DLY  daily weather: year month day, solar MJ/m2, Tmax and Tmin degC, precipitation mm, RH fraction, wind m/s at 10 m (2X,3I4,6F6.2; no header).` : "",
+        wx ? `        Feb 29 is included: set LPYR = 0 (${E ? "EPICCONT" : "APEXCONT"} line 1 field 9). NGN = 2345 reads every variable (line 1 field 6).` : "",
+        wx ? `        Missing values: ${E ? "999.0 (generated by the model)" : "blank for solar, RH and wind; 9999.0 for Tmax, Tmin and rain (generated by the model)"}.` : "",
         gone ? `        ${gone}` : "",
         wx && badText(wx) ? `        ${badText(wx)}` : "",
-        `${b}.WP1  monthly weather-generator statistics computed like WXPM3020 from ${statSrc} (${E ? "12F10.2" : "12F6.2"}); rain totals and wet days are per whole month`
-          + " from the days with data; WI (row 13) is 0, so the model estimates it.",
+        wx ? `${b}.WP1  monthly weather-generator statistics computed like WXPM3020 from ${statSrc} (${E ? "12F10.2" : "12F6.2"}); rain totals and wet days are per whole month`
+          + " from the days with data, PW|D and PW|W from the days whose day before has data; WI (row 13) is 0, so the model estimates it." : "",
         ...sn.map(s => `        ${s}`),
-        `${b}.WND  monthly 10 m wind speed and % of time from 16 directions (${E ? "12F10.2" : "12F6.1"}), from ${wndSrc}.`,
+        wx ? `${b}.WND  monthly 10 m wind speed and % of time from 16 directions (${E ? "12F10.2" : "12F6.1"}), from ${wndSrc}.` : "",
         soil ? `${b}.SOL  soil ${soil.name}: ${soil.source}. Field capacity and wilting point are written for the fine earth; use them with ISW = ${E ? "6 (EPICCONT line 2 field 6)" : "3 (APEXCONT line 2 field 8)"}, otherwise the model re-estimates them.` : "",
-        soil ? "        Not in SSURGO and left 0 (estimated by the model): organic N, sum of bases, NO3, labile P, residue, oven-dry bulk density, P sorption, lateral K, organic P, exchangeable K. Mineralogy is set to mixed (XIDK = 2), years of cultivation to 50." : "",
+        soil ? "        Left 0, so the model estimates them: organic N, sum of bases, NO3, labile P, residue, oven-dry bulk density, P sorption, lateral K, organic P, exchangeable K. Mineralogy is set to mixed (XIDK = 2), years of cultivation to 50." : "",
         soil ? `        ${lay.text}` : "",
-        "", "Add these lines to the list files (ID 901 is an example):",
-        `  ${E ? "WDLSTCOM.DAT" : "WDLSTCOM.DAT"}:  '  901 ${b}.DLY${ll}   ${short(site.name, 20)}'`,
-        `  ${E ? "WPM1USEL.DAT" : "WPM1.DAT (the FWPM file in APEXFILE.DAT)"}:  '  901 ${b}.WP1${ll}   ${short(site.name, 20)}'`,
-        `  ${E ? "WINDUSEL.DAT" : "WIND.DAT (the FWIND file in APEXFILE.DAT)"}:  '  901 ${b}.WND${ll}   ${short(site.name, 20)}'`,
+        "", wx || soil ? `Add ${wx ? "these lines" : "this line"} to the list file${wx ? "s" : ""} (ID 901 is an example):` : "",
+        wx ? `  WDLSTCOM.DAT:  '  901 ${b}.DLY${ll}   ${short(site.name, 20)}'` : "",
+        wx ? `  ${E ? "WPM1USEL.DAT" : "WPM1.DAT (the FWPM file in APEXFILE.DAT)"}:  '  901 ${b}.WP1${ll}   ${short(site.name, 20)}'` : "",
+        wx ? `  ${E ? "WINDUSEL.DAT" : "WIND.DAT (the FWIND file in APEXFILE.DAT)"}:  '  901 ${b}.WND${ll}   ${short(site.name, 20)}'` : "",
         soil ? `  SOILCOM.DAT:  '  901 ${b}.SOL'` : "",
-        E ? "Then point EPICRUN.DAT at them (ISIT, IWP1 = 901, IWND = 901, INPS = 901, IWTH = 901)." : "Then use IWPM = 901 and IWND = 901 in APEXRUN.DAT, and INPS = 901 (soil) and IWTH = 901 (daily weather) on line 2 of the .SUB file.",
+        !wx && !soil ? "" : E ? `Then point EPICRUN.DAT at ${wx ? "them" : "it"} (ISIT, ${[wx ? "IWP1 = 901, IWND = 901" : "", soil ? "INPS = 901" : "", wx ? "IWTH = 901" : ""].filter(Boolean).join(", ")}).`
+          : `Then use ${wx ? "IWPM = 901 and IWND = 901 in APEXRUN.DAT, and " : ""}${sub} on line 2 of the .SUB file.`,
       ].filter(x => x !== "").join(CRLF) + CRLF });
       files.notes = notes;
       return files;
@@ -349,10 +392,17 @@
       mean(sr[m]), mean(rh[m]) / 100, mean(ws[m]) * TO_17]);
     return { months: out, years: Math.max(...R.map(r => r.years)) };
   }
+  /* a layer's soils.sol values, dp to ph (the QSWAT+ table takes the first 12, to ec), also for the data sheet's
+     preview; usle_k is the rock-free K (SWAT+ applies its own coarse-fragment factor) */
+  const swatLay = soil => {
+    const alb = ok(soil.albedo) ? soil.albedo : 0.13, kOf = l => (ok(l.kf) ? l.kf : ok(l.kw) ? l.kw : williamsK(l));
+    return l => [l.bot * 10, l.bd, ok(l.awc) ? l.awc : (ok(l.dul) && ok(l.ll) ? l.dul - l.ll : 0), l.ksat, ok(l.om) ? l.om / 1.72 : l.oc, l.clay, l.silt, l.sand,
+      Math.min(98, l.cfWt || 0), alb, kOf(l), l.ec || 0, l.caco3 || 0, ok(l.ph) ? l.ph : 7];
+  };
   const WGN_COLS = ["tmp_max_ave", "tmp_min_ave", "tmp_max_sd", "tmp_min_sd", "pcp_ave", "pcp_sd", "pcp_skew", "wet_dry", "wet_wet", "pcp_days", "pcp_hhr", "slr_ave", "dew_ave", "wnd_ave"];
   W.swatplus = ctx => {
     const { soil, site } = ctx, wx = clean(ctx.wx), files = [], notes = [], st = swatStationName(site), wgn = `wgn${st.slice(1)}`;
-    let wgnSrc = "the same days", sn = [], gone = "", soilNote = null, uLine = "";
+    let wgnSrc = "the same days", sn = [], gone = "", soilNote = null, uLine = "", noK = false, noPh = false;
     if (wx) {
       // generator statistics need every month: each group from the chosen dates, or from 10 complete years when they lack it
       const what = "the weather-wgn.cli statistics", src = statSources(wx, ctx.climWx, "SWAT+", what), none = noneOf(wx);
@@ -391,11 +441,8 @@
       const name = short(soil.id === "USER" ? `USER_${soil.name}` : soil.id, 20).replace(/ /g, "_") || "WGSOIL";
       const hg = ((soil.hydgrp || "B").trim()[0] || "B").toUpperCase();
       const tex = (L.map(l => (l.texture || texOf(l) || "").replace(/\s+/g, "")).filter(Boolean).join("-") || "UNK").slice(0, 16).replace(/-+$/, ""); // SWAT+ reads 16 characters
-      const alb = ok(soil.albedo) ? soil.albedo : 0.13;
-      const kOf = l => (ok(l.kf) ? l.kf : ok(l.kw) ? l.kw : williamsK(l)); // rock-free K (SWAT+ applies its own coarse-fragment factor)
       const head = ["name", "nly", "hyd_grp", "dp_tot", "anion_excl", "perc_crk", "texture", "dp", "bd", "awc", "soil_k", "carbon", "clay", "silt", "sand", "rock", "alb", "usle_k", "ec", "caco3", "ph"];
-      const lay = l => [l.bot * 10, l.bd, ok(l.awc) ? l.awc : (ok(l.dul) && ok(l.ll) ? l.dul - l.ll : 0), l.ksat, ok(l.om) ? l.om / 1.72 : l.oc, l.clay, l.silt, l.sand,
-        Math.min(98, l.cfWt || 0), alb, kOf(l), l.ec || 0, l.caco3 || 0, ok(l.ph) ? l.ph : 7];
+      const lay = swatLay(soil);
       files.push({ name: "soils.sol", text: [`soils.sol: ${soil.name} - ${soil.source} - written by WindGuard TX`,
         `${"name".padEnd(25)}  ${"nly".padStart(8)}  ${"hyd_grp".padStart(16)}  ${"dp_tot".padStart(12)}  ${"anion_excl".padStart(12)}  ${"perc_crk".padStart(12)}  ${"texture".padEnd(25)}  ` + head.slice(7).map(h => h.padStart(12) + "  ").join(""),
         `${name.padEnd(25)}  ${I(L.length, 8)}  ${hg.padStart(16)}  ${F(L[L.length - 1].bot * 10, 12, 5)}  ${F(0.5, 12, 5)}  ${F(0.5, 12, 5)}  ${tex.padEnd(25)}  `,
@@ -408,11 +455,12 @@
       const row = [1, soil.id, soil.id, name, "WG", 100, L10.length, hg, L10[L10.length - 1].bot * 10, 0.5, 0.5, tex];
       for (let i = 0; i < 10; i++) { const l = L10[i]; row.push(...(l ? lay(l).slice(0, 12).map(v => +(+v || 0).toFixed(4)) : new Array(12).fill(0))); }
       for (let i = 0; i < 10; i++) row.push(L10[i] ? +(L10[i].caco3 || 0).toFixed(2) : 0);
-      for (let i = 0; i < 10; i++) row.push(L10[i] ? +(L10[i].ph || 0).toFixed(2) : 0);
+      for (let i = 0; i < 10; i++) row.push(L10[i] ? +(ok(L10[i].ph) ? L10[i].ph : 7).toFixed(2) : 0);
       files.push({ name: "usersoil_windguard.csv", text: cols.join(",") + "\n" + row.join(",") + "\n" });
-      soilNote = layering(soil, "soils.sol", L, hzOf(soil), [
+      noK = L.some(l => !ok(l.kf) && !ok(l.kw)); noPh = L.some(l => !ok(l.ph));
+      soilNote = layering(soil, "soils.sol", L, hzOf(soil), [omBlank(soil, "carbon is 0 in soils.sol and the user soil table"),
         noBd.length ? `soils.sol and the QSWAT+ table leave out the ${and(noBd.map(l => `${cm1(l.top)}-${cm1(l.bot)} cm`))} horizon${noBd.length > 1 ? "s, which have" : ", which has"} no survey bulk density, as the official SWAT+ soil database does.` : "",
-        L.length > 10 ? `The QSWAT+ user soil table takes at most 10 layers, so the ${L.length} layers of soils.sol were merged to 10 there (the thinnest neighbours, thickness-weighted; Ksat as a harmonic mean).` : ""]);
+        L.length > 10 ? `The QSWAT+ user soil table takes at most 10 layers, so the ${L.length} layers of soils.sol were merged to 10 there (the thinnest neighbours, thickness-weighted, organic matter, carbon, CaCO3 and N by mass; Ksat as a harmonic mean).` : ""]);
       if (L.length > 10) uLine = `  ${layersLine("usersoil_windguard.csv", L10)}.`;
       notes.push(...soilNote.notes);
     }
@@ -424,14 +472,15 @@
       wx && badText(wx) ? `  ${badText(wx)}` : "",
       wx ? "  Import: SWAT+ Editor > Weather generator / Observed weather > import 'SWAT+ format' from this folder; or copy the files into TxtInOut, list them in file.cio" : "",
       wx ? "  ('climate weather-sta.cli weather-wgn.cli null pcp.cli tmp.cli slr.cli hmd.cli wnd.cli null') and name the station in the 'wst' column of the .con files." : "",
-      wx ? `  weather-wgn.cli: monthly generator statistics from ${wgnSrc} (wet day >= 0.1 mm; rain totals and wet days per whole month from the days with data;`
+      wx ? `  weather-wgn.cli: monthly generator statistics from ${wgnSrc} (wet day >= 0.1 mm; rain totals and wet days per whole month from the days with data, wet_dry and wet_wet from the days whose day before has data;`
         + " pcp_hhr is a third of the largest daily rain of each month, averaged over the years in which the month is complete, because no sub-daily rain is available)." : "",
       ...sn.map(s => `    ${s}`),
       wx ? "  swat2012_format/: the same data in the ArcSWAT / SWAT2012 text format (ID,NAME,LAT,LONG,ELEVATION lists plus one file per station)." : "",
       soil ? `Soil ${soil.name} (${soil.source}): soils.sol (TxtInOut) and usersoil_windguard.csv (QSWAT+ user soil table, 152 columns).` : "",
       soil ? "  Units: dp mm, bd g/cm3, awc mm/mm, soil_k mm/h, carbon % (OM/1.72), rock % by weight > 2 mm, alb = dry albedo (as in the official SWAT+ SSURGO database), usle_k = rock-free K (kffact)." : "",
-      soil ? "  Horizons without bulk density (bedrock, cemented pans) are left out, as in the official database; a dual hydrologic group keeps its first letter." : "",
-      soil && soil.layers.some(l => !ok(l.kf) && !ok(l.kw)) ? "  Layers without a survey K factor get one from texture and organic carbon (Williams 1995, the SWAT method); a blank pH is written as 7.0." : "",
+      soil ? `  ${soil.mukey && soil.layering !== "custom" ? "Horizons without bulk density (bedrock, cemented pans) are left out, as in the official database; a" : "A"} dual hydrologic group keeps its first letter.` : "",
+      noK ? "  Layers without a survey K factor get one from texture and organic carbon (Williams 1995, the SWAT method)." : "",
+      noPh ? "  A blank pH is written as 7.0 in soils.sol and the QSWAT+ table." : "",
       soil ? `  ${soilNote.text}` : "",
       uLine,
     ].filter(Boolean).join("\r\n") + "\r\n" });
@@ -443,12 +492,16 @@
   const ascii = s => String(s ?? "").normalize("NFKD").replace(/[^\x20-\x7e]/g, "");
   const r1 = v => (Math.round(v * 10) / 10 + 0).toFixed(1); // one decimal, never "-0.0"
   const r3 = v => Math.round(v * 1000) / 1000;
-  const srcLabel = wx => (wx.source === "gridmet" ? "gridMET 4-km daily (Abatzoglou 2013)" : wx.source === "power" ? "NASA POWER daily (MERRA-2 based)" : ascii(wx.source || "own daily file"));
+  const srcLabel = wx => (wx.source === "gridmet" ? "gridMET 4-km daily (Abatzoglou 2013)" : wx.source === "power" ? "NASA POWER daily (MERRA-2 based)"
+    : wx.source === "prism" ? `PRISM 4-km rain and temperature (PRISM Group, Oregon State University, accessed ${new Date().toISOString().slice(0, 10)})${wx.rest ? ` with ${wx.rest} solar, humidity and wind` : ""}` : ascii(wx.source || "own daily file"));
   /* where a series' grass reference ET0 comes from. The data sheet fills a file's ET0 before the writers run;
      wx.et0Made, when there, counts the file's own days, the days worked out, those by Hargreaves and those with solar
      radiation from the temperature range. */
   function et0Text(wx) {
     if (wx.source === "gridmet") return "gridMET's grass reference ET (ASCE standardized Penman-Monteith, the FAO-56 constants)";
+    // without another source there is no solar radiation, humidity or wind, so fao56 takes Hargreaves on every day
+    if (wx.source === "prism") return wx.rest ? `FAO-56 Penman-Monteith worked out by WindGuard TX from PRISM's temperature and ${wx.rest} solar radiation, humidity and wind, or Hargreaves (FAO-56 Eq. 52) on days without them`
+      : `Hargreaves (FAO-56 Eq. 52) worked out by WindGuard TX from PRISM's Tmax and Tmin on every day, as there is no solar radiation, humidity or wind${wx.restWhy ? ` (${wx.restWhy})` : ""}`;
     if (wx.source === "power") return "FAO-56 Penman-Monteith worked out by WindGuard TX from NASA POWER's daily weather, or Hargreaves (FAO-56 Eq. 52) on days without solar radiation, dew point or wind";
     const n = wx.et0Made, days = x => `${x} day${x === 1 ? "" : "s"}`, how = "from the file's columns after any gap filling: FAO-56 Penman-Monteith";
     const hs = which => `, or Hargreaves (FAO-56 Eq. 52) on ${which} without humidity or wind`;
@@ -522,23 +575,35 @@
       }
     }
     if (keys.includes("et0")) {
-      let x = 0;
+      let x = 0, xs = 0; // xs: days whose Penman-Monteith ET0 takes the solar radiation filled above
       const phi = (t.lat * Math.PI) / 180, z = t.elev ?? 0, u2 = w.wind2 || t.wind2 || [], rs = w.srad || t.srad || [];
       w.et0 = t.days.map((d, k) => {
         const v = t.et0 ? t.et0[k] : null;
         if (ok(v)) return v;
         x++;
-        return Wd.fao56(doyOf(d), phi, z, w.tmax[k], w.tmin[k], t.tdew && ok(t.tdew[k]) ? t.tdew[k] : null, ok(u2[k]) ? u2[k] : null, ok(rs[k]) ? rs[k] : null);
+        const td = t.tdew && ok(t.tdew[k]) ? t.tdew[k] : null, u = ok(u2[k]) ? u2[k] : null;
+        if (td !== null && u !== null && ok(rs[k]) && !(t.srad && ok(t.srad[k]))) xs++;
+        return Wd.fao56(doyOf(d), phi, z, w.tmax[k], w.tmin[k], td, u, ok(rs[k]) ? rs[k] : null);
       });
-      count("et0", x);
+      count("et0", x); count("et0Srad", xs);
     }
     w.completed = n;
     return w;
   }
+  /* the gap-free copy each model gets: what complete fills, and the daily variables its files hold (AquaCrop's solar
+     radiation only feeds the ET0 of days without one). For the writers and the data sheet's preview. */
+  const GAP_FREE = { dssat: { keys: ["srad", "prcp"], holds: ["srad", "tmax", "tmin", "prcp", "tdew", "wind2"] },
+    apsim: { keys: ["srad", "prcp", "vp", "wind2"], holds: ["srad", "tmax", "tmin", "prcp", "vp", "wind2"] },
+    aquacrop: { keys: ["srad", "prcp", "et0"], holds: ["tmax", "tmin", "prcp", "et0"] } };
+  const gapFree = (model, wx) => Object.assign(complete(wx, GAP_FREE[model].keys), { holds: GAP_FREE[model].holds });
+  // the variable a count of w.completed is for (wind2Month: wind2; swap: Tmax and Tmin; et0Srad: ET0)
+  const filledVar = k => (k === "swap" ? "tmax" : k === "et0Srad" ? "et0" : k.replace(/Month$/, ""));
   const FILLED = { tmax: "Tmax (linear between neighbouring days)", tmin: "Tmin (linear)", wind2: "wind (linear)", wind2Month: "wind (monthly mean, more than 3 days at the start or end)", swap: "Tmax below Tmin (swapped)",
-    srad: "solar radiation (Hargreaves, FAO-56 Eq. 50)", prcp: "rain (set to 0)", vp: "vapour pressure (from dew point or Tmin)", et0: "ET0 (FAO-56 from the other columns)" };
+    srad: "solar radiation (Hargreaves, FAO-56 Eq. 50)", prcp: "rain (set to 0)", vp: "vapour pressure (from dew point or Tmin)", et0: "ET0 (FAO-56 from the other columns)",
+    et0Srad: "solar radiation for that ET0 (Hargreaves, FAO-56 Eq. 50)" };
+  // the days filled in what the files hold
   const filledText = w => {
-    const e = Object.entries(w.completed || {});
+    const e = Object.entries(w.completed || {}).filter(([k]) => !w.holds || w.holds.includes(filledVar(k)));
     return [badText(w), e.length ? `Missing days filled, because this model cannot read gaps: ${e.map(([k, c]) => `${FILLED[k] || k} ${c} day${c > 1 ? "s" : ""}`).join("; ")}.`
       : "No missing values needed filling."].filter(Boolean).join(" ");
   };
@@ -584,11 +649,12 @@
   const climOf = (ctx, perYear) => tavAmp(ctx.wx, perYear) || tavAmp(ctx.climWx, perYear) || tavAmp(ctx.wx, perYear, true);
   // why TAV and AMP do not come from the chosen dates alone
   const tavWhy = wx => (new Set(wx.days.map(months)).size === 12 ? "the dates have fewer than 20 days of Tmax and Tmin in some months" : "the dates do not cover every month");
-  // NOAA GML Mauna Loa annual mean CO2 (ppm), 1979-2025 (gml.noaa.gov/ccgg/trends); later years +2.5 ppm a year, as AquaCrop's MaunaLoa.CO2
+  // NOAA GML Mauna Loa annual mean CO2 (ppm), 1979-2025 and 1959-1978 (gml.noaa.gov/ccgg/trends); later years +2.5 ppm a year, as AquaCrop's MaunaLoa.CO2; earlier years the 1959 value
   const CO2_Y0 = 1979, CO2 = [336.84, 338.76, 340.12, 341.48, 343.15, 344.87, 346.35, 347.61, 349.31, 351.69, 353.20, 354.45, 355.70, 356.54, 357.21,
     358.96, 360.97, 362.74, 363.88, 366.84, 368.54, 369.71, 371.32, 373.45, 375.98, 377.70, 379.98, 382.09, 384.02, 385.83, 387.64, 390.10, 391.85,
     394.06, 396.74, 398.81, 401.01, 404.41, 406.76, 408.72, 411.65, 414.21, 416.41, 418.53, 421.08, 424.61, 427.35];
-  const co2Of = y => (y < CO2_Y0 ? CO2[0] : y - CO2_Y0 < CO2.length ? CO2[y - CO2_Y0] : CO2[CO2.length - 1] + 2.5 * (y - CO2_Y0 - CO2.length + 1));
+  const CO2_OLD_Y0 = 1959, CO2_OLD = [315.98, 316.91, 317.64, 318.45, 318.99, 319.62, 320.04, 321.37, 322.18, 323.05, 324.62, 325.68, 326.32, 327.46, 329.68, 330.19, 331.13, 332.03, 333.84, 335.41];
+  const co2Of = y => (y < CO2_Y0 ? CO2_OLD[Math.max(0, y - CO2_OLD_Y0)] : y - CO2_Y0 < CO2.length ? CO2[y - CO2_Y0] : CO2[CO2.length - 1] + 2.5 * (y - CO2_Y0 - CO2.length + 1));
   /* horizons the crop models can use: water retention and bulk density present, from the first such horizon down to
      the first without (bedrock or a cemented pan ends the profile) */
   function soilRows(soil) {
@@ -606,15 +672,27 @@
     const all = soilRows(soil), noBd = soil.layering === "custom" ? [] : all.filter(l => l.noBd);
     return { L: all.filter(l => !noBd.includes(l)), noBd };
   }
-  // the layers of a model's soil file (the plain CSV and the soil table list them all), by the functions its writer uses
-  function modelLayers(model, soil) {
-    if (model === "dssat") return dssatLayers(soil);
-    if (model === "apsim") return apsimLayers(soil);
-    if (model === "swatplus") return swatLayers(soil).L;
-    if (model === "epic" || model === "apex") return mergeLayers(soilRows(soil), model === "epic" ? 15 : 10);
-    if (model === "aquacrop") return mergeLayers(soilRows(soil), 5);
+  /* each layer of a model's soil file with the values it holds, for the data sheet's preview, by the functions its
+     writer uses: what the writer changed shows (fine earth, the LL < DUL < SAT caps, defaults), what the file does not
+     hold is left out, and a missing value stays null. The plain CSV and the soil table list the layers as they are. */
+  function writtenLayers(model, soil) {
+    if (model === "dssat") return dssatValues(dssatLayers(soil));
+    if (model === "epic" || model === "apex") return epicLayers(soil, model);
+    if (model === "apsim") {
+      const L = apsimLayers(soil), v = apsimValues(L);
+      return L.map((l, i) => ({ top: l.top, bot: l.bot, hz: l.hz, bd: v.BD[i], ll: v.LL[i], dul: v.DUL[i], sat: v.SAT[i], ksat: v.KS[i] / 24, sand: v.sand[i], silt: v.silt[i], clay: v.clay[i],
+        oc: v.carbon[i], ph: v.ph[i], cec: v.cec ? v.cec[i] : null, cfVol: v.rocks ? v.rocks[i] : null }));
+    }
+    if (model === "aquacrop") return aquaValues(aquaLayers(soil)).map(x => ({ top: x.l.top, bot: x.l.bot, hz: x.l.hz, ll: x.wp / 100, dul: x.fc / 100, sat: x.sat / 100, ksat: x.ks / 24 }));
+    if (model === "swatplus") {
+      const lay = swatLay(soil);
+      return swatLayers(soil).L.map(l => { const v = lay(l); return { top: l.top, bot: l.bot, hz: l.hz, bd: v[1], awc: v[2], ksat: v[3], oc: v[4], clay: v[5], silt: v[6], sand: v[7], cfWt: v[8], ec: v[11], caco3: v[12], ph: v[13] }; });
+    }
+    if (model === "century") return WG.writerUtil.centuryLayers(soil);
     return soil.layers;
   }
+  // what a file holds where the soil has no organic matter, for its README
+  const omBlank = (soil, what) => (soil.layers.some(l => !ok(l.om) && ok(l.ll)) ? `Layers without organic matter: ${what}.` : "");
   // "model": each model's usual layering; "survey" and "custom": the layers as given (merged only past a model's limit)
   const ownLayers = soil => soil.layering === "custom" || soil.layering === "survey";
   const texOf = l => WG.soil.textureClass(l.sand, ok(l.silt) ? l.silt : 100 - l.sand - l.clay, l.clay);
@@ -622,7 +700,11 @@
   // "WG.SOL: 13 layers, 0-203 cm, bottoms 5, 15, 26, ... 203 cm"
   const layersLine = (file, L) => `${file}: ${L.length} layer${L.length > 1 ? "s" : ""}, ${cm1(L[0].top)}-${cm1(L[L.length - 1].bot)} cm, bottoms ${L.map(l => cm1(l.bot)).join(", ")} cm`;
   const hzOf = soil => (soil.mukey ? "the survey's horizons" : "your layers");
-  const mergedText = (model, max, n) => `${model} takes at most ${max} layers, so the profile's ${n} layers were merged to ${max} (the thinnest neighbours, thickness-weighted; Ksat as a harmonic mean).`;
+  const mergedText = (model, max, n) => `${model} takes at most ${max} layers, so the profile's ${n} layers were merged to ${max} (the thinnest neighbours, thickness-weighted, organic matter, carbon, CaCO3 and N by mass; Ksat as a harmonic mean).`;
+  /* a restriction at the surface would leave no layer open to roots: APSIM refuses that soil, and DSSAT and AquaCrop
+     grow no roots on it. So the first layer stays open, and a note says so. */
+  const rootsOpen = (l, i) => i === 0 || l.srgf !== 0;
+  const rootNote = (L, what) => (L[0].srgf === 0 ? `The survey puts a root-restrictive layer at the top of this soil, so no layer would be open to roots. The first layer (${cm1(L[0].top)}-${cm1(L[0].bot)} cm) is left open (${what}) so that the file can be run${L.length > 1 ? ", and the layers below stay closed" : ""}: check that this soil suits the crop.` : "");
   /* the README text on a soil file's layers: count, depth range and bottoms, how they were made (usual: the model's
      own layering), where bedrock or the end of the profile left its mark, and fit: what was merged or cut to fit the
      model, which are also the notes for the data sheet */
@@ -643,6 +725,13 @@
     return String(Math.round(v)).padStart(w);
   };
   const MISS6 = "   -99";
+  /* '!' comment lines of at most 119 characters (CSM reads a .WTH line into 120), broken between words; only a word
+     longer than a line is cut */
+  function comments(text, max = 119) {
+    const L = [];
+    text.split(" ").forEach(word => { const k = L.length - 1; if (k >= 0 && L[k].length + 1 + word.length <= max) L[k] += ` ${word}`; else L.push(`! ${word}`.slice(0, max)); });
+    return L;
+  }
   const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   /* 4-character station code from a hash of the coordinates (to 0.001°): a letter, a digit, then two letters or
      digits, 336,960 codes, so nearby places rarely share file names; the digit sets it apart from nearly all of the
@@ -662,21 +751,26 @@
     return `WG${LETTERS[h % 26]}${(Math.floor(h / 26) * 65536 + (h2 >>> 16)).toString(36).toUpperCase().padStart(7, "0").slice(-7)}`;
   }
   const DSSAT_STD = [5, 15, 30, 45, 60, 90, 120, 150, 180, 210];
+  const stdInProfile = H => DSSAT_STD.filter(d => d > H[0].top && d < H[H.length - 1].bot);
+  // the standard depths used: not one less than 1 cm from a horizon bottom (15 beside a table's 15.24 cm, 6 in), which would be a sliver of a layer
+  const stdDepths = H => stdInProfile(H).filter(d => !H.some(l => l.bot !== d && Math.abs(l.bot - d) < 1));
   /* the horizons split at DSSAT's standard depths (CSM keeps the file's layers apart, so the root growth factor
      decreases smoothly), at most 20 layers; or the chosen layers as they are */
   function dssatLayers(soil) {
     const H = soilRows(soil);
     if (ownLayers(soil)) return H.length > 20 ? mergeLayers(H, 20) : H;
-    const hb = H.map(l => l.bot), bottom = hb[hb.length - 1];
-    let B = [...new Set([...hb, ...DSSAT_STD.filter(d => d > H[0].top && d < bottom)])].sort((a, b) => a - b);
+    const hb = H.map(l => l.bot);
+    let B = [...new Set([...hb, ...stdDepths(H)])].sort((a, b) => a - b);
     for (let i = B.length - 1; B.length > 20 && i >= 0; i--) if (!hb.includes(B[i])) B.splice(i, 1);
     const src = B.length > 20 ? mergeLayers(H, 20) : H;
     if (B.length > 20) B = src.map(l => l.bot);
     return B.map((bot, k) => {
       const top = k ? B[k - 1] : src[0].top, mid = (top + bot) / 2, h = src.find(l => mid > l.top && mid < l.bot) || src[src.length - 1];
-      return { ...h, top, bot, srgf: h.srgf === 0 ? 0 : bot <= 15 ? 1 : Math.exp(-0.02 * mid) };
+      return { ...h, top, bot, srgf: h.srgf === 0 ? 0 : mid <= 15 ? 1 : Math.exp(-0.02 * mid) };
     });
   }
+  // SLB: whole centimetres, as DSSAT's own files, or one decimal for a bottom that is not (CSM reads it list-directed)
+  const slb = v => fx(v, 6, Number.isInteger(+v.toFixed(1)) ? 0 : 1);
   function dssatSol(soil, place) {
     const L = dssatLayers(soil), id = dssatSoilId(soil), tex = texOf(L[0]) || "-99", depth = L[L.length - 1].bot;
     const survey = !!soil.mukey;
@@ -687,23 +781,29 @@
       ` ${(ascii(short(place || "Texas", 11)) || "Texas").padEnd(11)} ${"USA".padEnd(11)} ${soil.lat.toFixed(3).padStart(8)} ${soil.lon.toFixed(3).padStart(8)} ${ascii(soil.family || "").slice(0, 50)}`,
       ...dssatTable(soil)].join(CRLF) + CRLF;
   }
+  /* each layer's values as dssatTable writes them (missing stays null: the file has -99), also for the data sheet's
+     preview. CSM: LL < DUL < SAT; the first layer stays open to roots. Sand is not written: 100 - clay - silt */
+  const dssatValues = L => L.map((l, i) => {
+    const ll = r3(l.ll), dul = Math.max(r3(l.dul), ll + 0.01), sat = Math.max(r3(ok(l.sat) ? l.sat : 1 - l.bd / 2.65), dul + 0.01);
+    const silt = ok(l.silt) ? l.silt : ok(l.sand) && ok(l.clay) ? 100 - l.sand - l.clay : null;
+    return { top: l.top, bot: l.bot, hz: l.hz, ll, dul, sat, srgf: i === 0 && l.srgf === 0 ? 1 : l.srgf, ksat: l.ksat, bd: l.bd, oc: ok(l.oc) ? l.oc : ok(l.om) ? l.om / 1.724 : null,
+      clay: l.clay, silt, sand: ok(l.clay) && ok(silt) ? 100 - l.clay - silt : null, cfWt: ok(l.cfWt) ? l.cfWt : 0, ni: l.ni, ph: l.ph, cec: l.cec, caco3: l.caco3 };
+  });
   // the soil table of a profile: the surface line and the layer tiers (the soil ID is made from it)
   function dssatTable(soil) {
-    const L = dssatLayers(soil), tex = texOf(L[0]) || "-99";
+    const L = dssatLayers(soil), V = dssatValues(L), tex = texOf(L[0]) || "-99";
     const salb = ok(soil.albedo) && soil.albedo > 0 ? soil.albedo : 0.13, sldr = ok(soil.drainRate) ? soil.drainRate : 0.4, cn = ok(soil.cn) ? soil.cn : 73;
     const out = ["@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE",
       `${MISS6}${fx(salb, 6, 2)}${fx(WG.soil.slu1(tex), 6, 1)}${fx(sldr, 6, 2)}${fx(cn, 6, 0)}${fx(1, 6, 2)}${fx(1, 6, 2)}${MISS6.repeat(3)}`,
       "@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC"];
-    L.forEach(l => {
-      const ll = r3(l.ll), dul = Math.max(r3(l.dul), ll + 0.01), sat = Math.max(r3(ok(l.sat) ? l.sat : 1 - l.bd / 2.65), dul + 0.01); // CSM: LL < DUL < SAT
-      const oc = ok(l.oc) ? l.oc : ok(l.om) ? l.om / 1.724 : null, silt = ok(l.silt) ? l.silt : ok(l.sand) && ok(l.clay) ? 100 - l.sand - l.clay : null;
+    V.forEach(l => {
       const mh = ascii(l.hz).replace(/[\s,/+]/g, "").slice(0, 5) || "-99";
-      out.push(`${fx(l.bot, 6, 0)}${mh.padStart(6)}${fx(ll, 6, 3)}${fx(dul, 6, 3)}${fx(sat, 6, 3)}${fx(l.srgf, 6, 3)}${fx(ok(l.ksat) ? l.ksat / 10 : null, 6, 3)}${fx(l.bd, 6, 2)}${fx(oc, 6, 2)}`
-        + `${fx(l.clay, 6, 1)}${fx(silt, 6, 1)}${fx(ok(l.cfWt) ? l.cfWt : 0, 6, 1)}${fx(l.ni, 6, 3)}${fx(l.ph, 6, 1)}${MISS6}${fx(l.cec, 6, 1)}${MISS6}`);
+      out.push(`${slb(l.bot)}${mh.padStart(6)}${fx(l.ll, 6, 3)}${fx(l.dul, 6, 3)}${fx(l.sat, 6, 3)}${fx(l.srgf, 6, 3)}${fx(ok(l.ksat) ? l.ksat / 10 : null, 6, 3)}${fx(l.bd, 6, 2)}${fx(l.oc, 6, 2)}`
+        + `${fx(l.clay, 6, 1)}${fx(l.silt, 6, 1)}${fx(l.cfWt, 6, 1)}${fx(l.ni, 6, 3)}${fx(l.ph, 6, 1)}${MISS6}${fx(l.cec, 6, 1)}${MISS6}`);
     });
-    if (L.some(l => ok(l.caco3))) { // second tier: the same rows in the same order (CSM matches them by row)
+    if (V.some(l => ok(l.caco3))) { // second tier: the same rows in the same order (CSM matches them by row)
       out.push("@  SLB  SLPX  SLPT  SLPO CACO3  SLAL  SLFE  SLMN  SLBS  SLPA  SLPB  SLKE  SLMG  SLNA  SLSU  SLEC  SLCA");
-      L.forEach(l => out.push(`${fx(l.bot, 6, 0)}${MISS6.repeat(3)}${fx(ok(l.caco3) ? l.caco3 * 10 : null, 6, 1)}${MISS6.repeat(12)}`));
+      V.forEach(l => out.push(`${slb(l.bot)}${MISS6.repeat(3)}${fx(ok(l.caco3) ? l.caco3 * 10 : null, 6, 1)}${MISS6.repeat(12)}`));
     }
     return out;
   }
@@ -716,31 +816,51 @@
   }
   W.dssat = ctx => {
     const { site } = ctx, files = [], code = dssatStation(site), info = [], notes = [];
+    let wsta = code;
     if (ctx.wx) {
-      const w = complete(ctx.wx, ["srad", "prcp"]), c = climOf(ctx, false), cut = cutText(w, ctx);
-      const head = [`*WEATHER DATA : ${ascii(short(site.name, 40)) || "WindGuard TX"}`, "",
-        `! ${srcLabel(ctx.wx)} at ${site.lat.toFixed(4)}, ${site.lon.toFixed(4)}; written by WindGuard TX`.slice(0, 119),
-        `! WIND: 2 m daily mean wind, km/day. DEWP: dew point. TAV, AMP: ${c ? `${c.approx ? "approximate, " : ""}${c.label}` : "not enough months (DSSAT defaults)"}`.slice(0, 119),
-        "@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT",
-        `  ${code}${fx(site.lat, 9, 3)}${fx(site.lon, 9, 3)}${fx(site.elev ?? ctx.wx.elev, 6, 0)}${fx(c ? c.tav : null, 6, 1)}${fx(c ? c.amp : null, 6, 1)}${fx(2, 6, 1)}${fx(2, 6, 1)}`,
-        "@DATE  SRAD  TMAX  TMIN  RAIN  DEWP  WIND"];
-      const u2 = w.wind2 || [], td = w.tdew || [];
-      const line = k => {
-        const d = w.days[k];
-        return `${String(ymdOf(d)[0] % 100).padStart(2, "0")}${String(doyOf(d)).padStart(3, "0")}${fx(w.srad[k], 6, 1)}${fx(w.tmax[k], 6, 1)}${fx(w.tmin[k], 6, 1)}${fx(w.prcp[k], 6, 1)}`
-          + `${fx(td[k], 6, 1)}${fx(ok(u2[k]) ? u2[k] * 86.4 : null, 6, 0)}`;
-      };
+      const w = gapFree("dssat", ctx.wx), c = climOf(ctx, false), cut = cutText(w, ctx);
       const byYear = new Map();
       w.days.forEach((d, k) => { const y = ymdOf(d)[0]; if (!byYear.has(y)) byYear.set(y, []); byYear.get(y).push(k); });
-      const years = [...byYear.keys()], yy = y => String(y % 100).padStart(2, "0");
-      byYear.forEach((ks, y) => files.push({ name: `${code}${yy(y)}01.WTH`, text: [...head, ...ks.map(line)].join(CRLF) + CRLF }));
-      if (years.length > 1) files.push({ name: `${code}${yy(years[0])}${String(years.length).padStart(2, "0")}.WTH`, text: [...head, ...w.days.map((_, k) => line(k))].join(CRLF) + CRLF });
+      const years = [...byYear.keys()], yy = y => String(y % 100).padStart(2, "0"), nn = n => String(n).padStart(2, "0");
+      /* 2-digit years can only be 1941-2040 (FileX reads YY <= 40 as 20YY), and yearly names repeat after 100 years: such
+         dates take the 4-digit layout of DSSAT 4.8, in files of at most 99 years (a FileX date must fall within 99 years of
+         the file's first date) */
+      const y4 = years[0] < 1941 || years[years.length - 1] > 2040 || years.length > 99;
+      const head = [`${y4 ? "$" : "*"}WEATHER DATA : ${ascii(short(site.name, 40)) || "WindGuard TX"}`, "",
+        ...comments(`${srcLabel(ctx.wx)} at ${site.lat.toFixed(4)}, ${site.lon.toFixed(4)}; written by WindGuard TX`),
+        ...comments(`WIND: 2 m daily mean wind, km/day. DEWP: dew point. TAV, AMP: ${c ? `${c.approx ? "approximate, " : ""}${c.label}` : "not enough months (DSSAT defaults)"}`),
+        "@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT",
+        `  ${code}${fx(site.lat, 9, 3)}${fx(site.lon, 9, 3)}${fx(site.elev ?? ctx.wx.elev, 6, 0)}${fx(c ? c.tav : null, 6, 1)}${fx(c ? c.amp : null, 6, 1)}${fx(2, 6, 1)}${fx(2, 6, 1)}`,
+        `${y4 ? "@  DATE" : "@DATE"}  SRAD  TMAX  TMIN  RAIN  DEWP  WIND`];
+      const u2 = w.wind2 || [], td = w.tdew || [];
+      const line = k => {
+        const d = w.days[k], y = ymdOf(d)[0];
+        return `${y4 ? y : yy(y)}${String(doyOf(d)).padStart(3, "0")}${fx(w.srad[k], 6, 1)}${fx(w.tmax[k], 6, 1)}${fx(w.tmin[k], 6, 1)}${fx(w.prcp[k], 6, 1)}`
+          + `${fx(td[k], 6, 1)}${fx(ok(u2[k]) ? u2[k] * 86.4 : null, 6, 0)}`;
+      };
+      const wth = (stem, ks) => files.push({ name: `${stem}.WTH`, text: [...head, ...ks.map(line)].join(CRLF) + CRLF });
+      const span = ys => `${ys[0]}${ys.length > 1 ? `-${ys[ys.length - 1]}` : ""}`;
+      let whatFiles;
+      if (y4) {
+        const parts = [];
+        for (let j = 0; j < years.length; j += 99) parts.push(years.slice(j, j + 99));
+        const stem = ys => `${code}${yy(ys[0])}${nn(ys.length)}`;
+        parts.forEach(ys => wth(stem(ys), ys.flatMap(y => byYear.get(y))));
+        wsta = stem(parts[0]);
+        whatFiles = `${and(parts.map(ys => `${stem(ys)}.WTH for ${span(ys)}`))}, with 4-digit years ($WEATHER, dates YYYYDDD), because 2-digit years can only be 1941-2040${years.length > 99 ? " and one file serves at most 99 years" : ""}. Only DSSAT 4.8 reads this layout.`
+          + ` Use the 8-character name as WSTA${parts.length > 1 ? ", from the file that holds the run's start date" : ""}.`;
+        notes.push(`The DSSAT weather reaches outside 1941-2040 or spans over 99 years, so it is written with 4-digit years, which only DSSAT 4.8 reads, in ${parts.length > 1 ? `${parts.length} files of at most 99 years` : "one file"} instead of yearly files.`);
+      } else {
+        byYear.forEach((ks, y) => wth(`${code}${yy(y)}01`, ks));
+        if (years.length > 1) wth(`${code}${yy(years[0])}${nn(years.length)}`, w.days.map((_, k) => k));
+        whatFiles = `one file per year, ${code}YY01.WTH (DSSAT's own naming), for ${span(years)}`
+          + (years.length > 1 ? `; and all years in one file, ${code}${yy(years[0])}${nn(years.length)}.WTH (use the 8-character name as WSTA).` : ".");
+      }
       const gone = [td.some(ok) ? "" : "DEWP is -99 on every day (the weather has no humidity), so DSSAT estimates humidity from Tmin.",
         u2.some(ok) ? "" : "WIND is -99 on every day (the weather has no wind), so DSSAT uses 86.4 km/day (1 m/s)."].filter(Boolean);
       notes.push(...[badText(w), !c ? "TAV and AMP are -99 (too few months), so DSSAT uses its defaults of 20 and 5 degC."
         : c.approx ? `TAV and AMP in the .WTH header are approximate, from the monthly means of ${c.label}, because ${tavWhy(ctx.wx)}.` : ""].filter(Boolean), ...gone);
-      info.push(`Weather station ${code}: one file per year, ${code}YY01.WTH (DSSAT's own naming), for ${years[0]}${years.length > 1 ? `-${years[years.length - 1]}` : ""}`
-        + (years.length > 1 ? `; and all years in one file, ${code}${yy(years[0])}${String(years.length).padStart(2, "0")}.WTH (use the 8-character name as WSTA).` : "."),
+      info.push(`Weather station ${code}: ${whatFiles}`,
         `  ${srcLabel(ctx.wx)}. SRAD MJ/m2/day, TMAX and TMIN degC, RAIN mm, DEWP degC, WIND km/day at 2 m (REFHT and WNDHT 2 m); -99 = missing`
           + " (allowed for DEWP and WIND only: DSSAT then estimates humidity from Tmin and uses a wind of 86.4 km/day).",
         ...gone.map(s => `  ${s}`),
@@ -751,27 +871,31 @@
     const sid = ctx.soil ? dssatSoilId(ctx.soil) : null;
     if (ctx.soil) {
       const L = dssatLayers(ctx.soil), tex = texOf(L[0]) || "-99", H = soilRows(ctx.soil), merged = H.length > 20, own = ownLayers(ctx.soil);
-      // standard depths left unsplit to keep within 20 layers (dssatLayers drops the deepest first)
-      const skip = own || merged ? [] : DSSAT_STD.filter(d => d > H[0].top && d < H[H.length - 1].bot && !L.some(l => l.bot === d));
-      const lay = layering(ctx.soil, "WG.SOL", L, merged ? hzOf(ctx.soil) : `${hzOf(ctx.soil)} split at DSSAT's standard depths 5, 15, 30, 45, 60, 90, 120, 150, 180 and 210 cm`,
-        merged ? mergedText("DSSAT", 20, H.length) : skip.length ? `DSSAT takes at most 20 layers, so the layers are not split at ${and(skip.map(String))} cm.` : "");
+      // standard depths left unsplit to keep within 20 layers (dssatLayers drops the deepest first), and those beside a horizon bottom
+      const std = stdDepths(H), near = stdInProfile(H).filter(d => !std.includes(d)), skip = own || merged ? [] : std.filter(d => !L.some(l => l.bot === d));
+      const alb = ctx.soil.albedo, hasAlb = ok(alb) && alb > 0;
+      const lay = layering(ctx.soil, "WG.SOL", L, merged ? hzOf(ctx.soil) : `${hzOf(ctx.soil)} split at DSSAT's standard depths 5, 15, 30, 45, 60, 90, 120, 150, 180 and 210 cm${near.length ? ` (not at ${and(near.map(String))} cm, less than 1 cm from a bottom)` : ""}`,
+        [merged ? mergedText("DSSAT", 20, H.length) : skip.length ? `DSSAT takes at most 20 layers, so the layers are not split at ${and(skip.map(String))} cm.` : "", rootNote(L, "SRGF 1"), omBlank(ctx.soil, "SLOC is -99, which DSSAT fills in itself")]);
       files.push({ name: "WG.SOL", text: dssatSol(ctx.soil, site.name) });
       notes.push(...lay.notes);
       info.push(`WG.SOL: soil ${sid}, ${ctx.soil.name} (${ctx.soil.source}). The ID is WG + ${asSurveyed(ctx.soil) ? "the survey component key" : "a code from the soil table, so other layers or values give another ID"}.`,
         `  ${lay.text}`,
-        `  Surface: texture ${tex}; albedo ${ok(ctx.soil.albedo) ? "= SSURGO dry albedo" : "0.13 (no survey value)"}; SLU1 ${WG.soil.slu1(tex)} mm by texture (HC27 generic soils); SLDR from the drainage class; SLRO = curve number from the hydrologic group and slope.`,
-        "  Layers: SLLL, SDUL, SSAT = 15-bar, 1/3-bar and saturated water content; SSKS cm/h; SLOC = OM / 1.724; SLNI = SLOC / 10; SRGF = exp(-0.02 x mid-depth) below 15 cm, 0 below a restrictive layer; CACO3 g/kg.");
+        `  Surface: texture ${tex}; albedo ${!ctx.soil.mukey ? `${(hasAlb ? alb : 0.13).toFixed(2)} (the one you gave, or 0.13 if you gave none)` : hasAlb ? "= SSURGO dry albedo" : "0.13 (no survey value)"}; SLU1 ${WG.soil.slu1(tex)} mm by texture (HC27 generic soils); SLDR from the drainage class; SLRO = curve number from the hydrologic group and slope.`,
+        "  Layers: SLLL, SDUL, SSAT = 15-bar, 1/3-bar and saturated water content; SSKS cm/h; SLOC = OM / 1.724; SLNI = SLOC / 10 for each horizon, at most 0.5, and for a merged or custom layer its horizons' mean by mass; SRGF = exp(-0.02 x mid-depth) below 15 cm, 0 below a restrictive layer; CACO3 g/kg.");
     }
+    // the steps name only the files in this zip: without weather, FileX keeps the user's own WSTA
+    const hasWx = !!ctx.wx, steps = [
+      ...(hasWx ? [["Copy the .WTH files into C:\\DSSAT48\\Weather (or the experiment's folder)."]] : []),
+      ...(sid ? [["Copy WG.SOL into C:\\DSSAT48\\Soil. If a WG.SOL is already there from an earlier download, open both files and paste this profile",
+        `(from the line starting with '*${sid}' to the end) at the end of the old one instead of replacing the file. If the old file already has`,
+        `a profile *${sid}, delete that profile first: DSSAT uses the first profile with a matching ID.`]] : []),
+      ...(hasWx || sid ? [[`In the experiment file (FileX), *FIELDS section: ${[hasWx ? `WSTA = ${wsta}` : "", sid ? `ID_SOIL = ${sid}` : ""].filter(Boolean).join(", ")}${hasWx ? "" : " (keep your own weather station as WSTA: it is -99 below)"}. For example:`]] : []),
+    ];
     files.push({ name: "README.txt", text: [`DSSAT 4.8 files from WindGuard TX for ${site.name} (${site.lat.toFixed(5)}, ${site.lon.toFixed(5)}).`, "", ...info, "",
-      "How to use them:",
-      "  1. Copy the .WTH files into C:\\DSSAT48\\Weather (or the experiment's folder).",
-      ...(sid ? ["  2. Copy WG.SOL into C:\\DSSAT48\\Soil. If a WG.SOL is already there from an earlier download, open both files and paste this profile",
-        `     (from the line starting with '*${sid}' to the end) at the end of the old one instead of replacing the file. If the old file already has`,
-        `     a profile *${sid}, delete that profile first: DSSAT uses the first profile with a matching ID.`] : []),
-      `  ${sid ? 3 : 2}. In the experiment file (FileX), *FIELDS section: WSTA = ${code}${sid ? `, ID_SOIL = ${sid}` : ""}. For example:`,
-      "@L ID_FIELD WSTA....  FLSA  FLOB  FLDT  FLDD  FLDS  FLST SLTX  SLDP  ID_SOIL    FLNAME",
-      fieldLine(code, ctx.soil),
-      "Checked against the column rules of the DSSAT-CSM 4.8.6 Fortran readers (IPWTH, IPSOIL); not run in DSSAT here.",
+      ...(steps.length ? [`How to use ${hasWx ? "them" : "it"}:`, ...steps.flatMap((s, i) => s.map((l, j) => `  ${j ? "   " : `${i + 1}. `}${l}`)),
+        "@L ID_FIELD WSTA....  FLSA  FLOB  FLDT  FLDD  FLDS  FLST SLTX  SLDP  ID_SOIL    FLNAME",
+        fieldLine(hasWx ? wsta : "-99", ctx.soil),
+        `Checked against the column rules of the DSSAT-CSM 4.8.6 Fortran reader${hasWx && sid ? "s" : ""} (${[hasWx ? "IPWTH" : "", sid ? "IPSOIL" : ""].filter(Boolean).join(", ")}); not run in DSSAT here.`] : []),
     ].join(CRLF) + CRLF });
     files.notes = notes;
     return files;
@@ -779,7 +903,7 @@
 
   /* ======================= APSIM (Next Gen and 7.10) ======================= */
   function metText(ctx) {
-    const w = complete(ctx.wx, ["srad", "prcp", "vp", "wind2"]), c = climOf(ctx, true), site = ctx.site;
+    const w = gapFree("apsim", ctx.wx), c = climOf(ctx, true), site = ctx.site;
     const cols = [["year", "()", (k, d) => String(ymdOf(d)[0])], ["day", "()", (k, d) => String(doyOf(d))], ["radn", "(MJ/m^2)", k => r1(w.srad[k])],
       ["maxt", "(oC)", k => r1(w.tmax[k])], ["mint", "(oC)", k => r1(w.tmin[k])], ["rain", "(mm)", k => r1(w.prcp[k])]];
     if (w.vp) cols.push(["vp", "(hPa)", k => r1(w.vp[k] * 10)]);
@@ -811,8 +935,8 @@
   const KL_D = [0.06, 0.06, 0.06, 0.05, 0.04, 0.03, 0.02, 0.01], FBIOM_D = [0.04, 0.02, 0.02, 0.02, 0.01, 0.01, 0.01, 0.01],
     FINERT_D = [0.4, 0.6, 0.8, 1, 1, 1, 1, 1], FOM_MM = [1, 0.8, 0.3, 0.2, 0.133, 0.083, 0.05, 0.033];
   const APSIM_CROPS = ["Maize", "Sorghum", "Wheat", "Cotton"];
-  function apsimSoil(soil, site) {
-    const L = apsimLayers(soil), n = L.length, T = L.map(l => Math.round((l.bot - l.top) * 10)), mids = L.map(l => ((l.top + l.bot) / 2) * 10);
+  // the values apsimSoil writes for its layers L, by layer, also for the data sheet's preview
+  function apsimValues(L) {
     const BD = L.map(l => Math.min(2.65, Math.max(0.1, +l.bd.toFixed(2)))), LL = [], DUL = [], SAT = [], AIR = [];
     L.forEach((l, i) => { // APSIM's checks: AirDry <= LL15 <= DUL <= SAT <= 1 - BD/2.65
       const maxSat = r3(r3(1 - BD[i] / 2.65) - 0.001);
@@ -830,10 +954,15 @@
     const ph = L.map(l => { const v = ok(l.ph) ? l.ph : lastPh; lastPh = v; return +Math.min(11, Math.max(3.5, v)).toFixed(1); });
     const cec = L.every(l => ok(l.cec)) ? L.map(l => +l.cec.toFixed(1)) : null;
     const rocks = L.some(l => ok(l.cfVol) && l.cfVol > 0) ? L.map(l => +(ok(l.cfVol) ? l.cfVol : 0).toFixed(1)) : null;
+    return { BD, LL, DUL, SAT, AIR, KS, sand, clay, silt, carbon, ph, cec, rocks };
+  }
+  function apsimSoil(soil, site) {
+    const L = apsimLayers(soil), T = L.map(l => Math.round((l.bot - l.top) * 10)), mids = L.map(l => ((l.top + l.bot) / 2) * 10);
+    const { BD, LL, DUL, SAT, AIR, KS, sand, clay, silt, carbon, ph, cec, rocks } = apsimValues(L);
     const tex = texOf(L[0]), u = WG.soil.slu1(tex), north = site.lat >= 0, node = (type, name, extra) => ({ $type: `${type}, Models`, ...extra, Name: name, Children: extra.Children || [], Enabled: true, ReadOnly: false });
     const solute = (name, init, units) => node("Models.Soils.Solute", name, { Thickness: T, InitialValues: L.map(() => init), InitialValuesUnits: units, WaterTableConcentration: 0, D0: 0,
       Exco: null, FIP: null, DepthConstant: 0, MaxDepthSoluteAccessible: 0, RunoffEffectivenessAtMovingSolute: 0, MaxEffectiveRunoff: 0 });
-    const crops = APSIM_CROPS.map(c => node("Models.Soils.SoilCrop", `${c}Soil`, { LL, KL: mids.map(m => byDepth(KL_D, m)), XF: L.map(l => (l.srgf === 0 ? 0 : 1)) }));
+    const crops = APSIM_CROPS.map(c => node("Models.Soils.SoilCrop", `${c}Soil`, { LL, KL: mids.map(m => byDepth(KL_D, m)), XF: L.map((l, i) => (rootsOpen(l, i) ? 1 : 0)) }));
     const name = ascii(soil.name).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "") || "WindGuard_soil";
     const soilNode = node("Models.Soils.Soil", name, {
       RecordNumber: 0, ASCOrder: null, ASCSubOrder: null, SoilType: ascii(`${soil.name}${tex ? ` (${(WG.soil.TEX[tex] || tex)})` : ""}`), LocalName: null,
@@ -873,14 +1002,15 @@
       info.push(`${b}.met: daily weather, ${srcLabel(ctx.wx)}. Columns: ${m.cols.join(", ")} (radn MJ/m2, maxt and mint degC, rain mm${m.cols.includes("vp") ? ", vp hPa" : ""}${m.cols.includes("wind") ? ", wind m/s at 2 m" : ""}, co2 ppm).`,
         ...(cut ? [`  ${cut}`] : []),
         ...gone.map(s => `  ${s}`),
-        `  co2: NOAA Mauna Loa annual means (${CO2_Y0}-${CO2_Y0 + CO2.length - 1}; later years +2.5 ppm a year). Without it APSIM Next Gen assumes 350 ppm.`,
+        `  co2: NOAA Mauna Loa annual means (${CO2_OLD_Y0}-${CO2_Y0 + CO2.length - 1}; later years +2.5 ppm a year${ymdOf(m.w.days[0])[0] < CO2_OLD_Y0 ? `; earlier years have the ${CO2_OLD_Y0} value, ${CO2_OLD[0].toFixed(1)} ppm, as the record starts then` : ""}). Without it APSIM Next Gen assumes 350 ppm.`,
         `  tav and amp: ${m.c ? `${m.c.tav.toFixed(2)} and ${m.c.amp.toFixed(2)} degC, from the monthly means of ${m.c.label}${m.c.approx ? `, approximate because ${tavWhy(ctx.wx)}` : ""}` : "not written"}.`
           + " APSIM 7.10 (Classic) needs them, and APSIM Next Gen works them out itself only from two years of data or more.",
         `  ${filledText(m.w)}`);
     }
     if (ctx.soil) {
-      const s = apsimSoil(ctx.soil, site), lay = layering(ctx.soil, `${b}_soil.apsimx`, s.L, `${hzOf(ctx.soil)} on APSoil's usual 150, 150, 300, 300 ... mm layers (thickness-weighted)`);
+      const s = apsimSoil(ctx.soil, site), lay = layering(ctx.soil, `${b}_soil.apsimx`, s.L, `${hzOf(ctx.soil)} on APSoil's usual 150, 150, 300, 300 ... mm layers (thickness-weighted)`, [rootNote(s.L, "XF 1"), omBlank(ctx.soil, "Carbon is half that of the layer above, as APSIM needs a value")]);
       files.push({ name: `${b}_soil.apsimx`, text: s.text });
+      notes.push(...lay.notes);
       info.push(`${b}_soil.apsimx: soil '${s.name}' (${ctx.soil.source}), file version 168 (APSIM Next Gen from 2023 on opens and upgrades it).`,
         `  ${lay.text}`,
         `  Crops set up: ${APSIM_CROPS.join(", ")} (LL = LL15, KL 0.06 down to 0.01 with depth, XF 1, or 0 below a restrictive layer). For another crop, copy a SoilCrop node and rename it <Crop>Soil.`,
@@ -888,7 +1018,7 @@
         "  Initial water is at the drained upper limit (DUL); initial NO3 1 ppm and NH4 0.1 ppm. Check these and the other defaults for your field.");
     }
     files.push({ name: "README.txt", text: [`APSIM files from WindGuard TX for ${site.name} (${site.lat.toFixed(5)}, ${site.lon.toFixed(5)}).`, "", ...info, "",
-      "Checked against the rules of APSIM's own reader (ApsimTextFile, Weather) and soil checks (Soil.Check); not run in APSIM here."].join(CRLF) + CRLF });
+      ...(ctx.wx || ctx.soil ? [`Checked against ${and([ctx.wx ? "the rules of APSIM's own reader (ApsimTextFile, Weather)" : "", ctx.soil ? `${ctx.wx ? "" : "APSIM's "}soil checks (Soil.Check)` : ""].filter(Boolean))}; not run in APSIM here.`] : [])].join(CRLF) + CRLF });
     files.notes = notes;
     return files;
   };
@@ -905,14 +1035,16 @@
   }
   const aquaCR = (c, ks) => ({ 1: [-0.3112 - ks / 1e5, -1.4936 + 0.2416 * Math.log(ks)], 2: [-0.4986 + (9 * ks) / 1e5, -2.132 + 0.4778 * Math.log(ks)],
     3: [-0.5677 - (4 * ks) / 1e5, -3.7189 + 0.5922 * Math.log(ks)], 4: [-0.6366 + (8 * ks) / 1e4, -1.9165 + 0.7063 * Math.log(ks)] })[c];
+  // the horizons (at most 5) and the values aquaSol writes for each, also for the data sheet's preview
+  const aquaLayers = soil => { const H = soilRows(soil); return H.length > 5 ? mergeLayers(H, 5) : H; };
+  const aquaValues = L => L.map(l => {
+    const wp = +(100 * l.ll).toFixed(1), fc = Math.max(+(100 * l.dul).toFixed(1), +(wp + 0.1).toFixed(1));
+    const sat = Math.max(+(100 * (ok(l.sat) ? l.sat : 1 - l.bd / 2.65)).toFixed(1), fc), ks = +Math.max(ok(l.ksat) ? l.ksat * 24 : 1, 0.1).toFixed(1);
+    const [a, b] = aquaCR(aquaClass(sat, fc, wp, ks), ks);
+    return { l, wp, fc, sat, ks, a, b };
+  });
   function aquaSol(soil) {
-    const H = soilRows(soil), L = H.length > 5 ? mergeLayers(H, 5) : H;
-    const v = L.map(l => {
-      const wp = +(100 * l.ll).toFixed(1), fc = Math.max(+(100 * l.dul).toFixed(1), +(wp + 0.1).toFixed(1));
-      const sat = Math.max(+(100 * (ok(l.sat) ? l.sat : 1 - l.bd / 2.65)).toFixed(1), fc), ks = +Math.max(ok(l.ksat) ? l.ksat * 24 : 1, 0.1).toFixed(1);
-      const [a, b] = aquaCR(aquaClass(sat, fc, wp, ks), ks);
-      return { l, wp, fc, sat, ks, a, b };
-    });
+    const L = aquaLayers(soil), v = aquaValues(L);
     const g = String(soil.hydgrp || "").split("/").pop().trim().charAt(0).toUpperCase(), ksTop = v[0].ks;
     const cn = { A: 46, B: 61, C: 72, D: 77 }[g] ?? (ksTop > 864 ? 46 : ksTop >= 347 ? 61 : ksTop >= 36 ? 72 : 77); // Table 2.14d (5% initial abstraction)
     const rew = Math.max(0, Math.min(15, Math.round(10 * (v[0].fc - v[0].wp / 2) * 0.04)));
@@ -921,14 +1053,14 @@
       `${String(L.length).padStart(9)}                   : number of soil horizons`, "       -9                   : variable no longer applicable",
       "  Thickness  Sat   FC    WP     Ksat   Penetrability  Gravel  CRa       CRb           description",
       "  ---(m)-   ----(vol %)-----  (mm/day)      (%)        (%)    -----------------------------------------",
-      ...v.map(x => `${((x.l.bot - x.l.top) / 100).toFixed(2).padStart(8)} ${x.sat.toFixed(1).padStart(7)} ${x.fc.toFixed(1).padStart(5)} ${x.wp.toFixed(1).padStart(5)} ${x.ks.toFixed(1).padStart(8)} `
-        + `${String(x.l.srgf === 0 ? 0 : 100).padStart(10)} ${"0".padStart(9)} ${x.a.toFixed(6).padStart(11)} ${x.b.toFixed(6).padStart(10)}   ${(ascii(x.l.hz).replace(/[^A-Za-z0-9+_-]/g, "") || "layer").slice(0, 24)}`)];
+      ...v.map((x, i) => `${((x.l.bot - x.l.top) / 100).toFixed(2).padStart(8)} ${x.sat.toFixed(1).padStart(7)} ${x.fc.toFixed(1).padStart(5)} ${x.wp.toFixed(1).padStart(5)} ${x.ks.toFixed(1).padStart(8)} `
+        + `${String(rootsOpen(x.l, i) ? 100 : 0).padStart(10)} ${"0".padStart(9)} ${x.a.toFixed(6).padStart(11)} ${x.b.toFixed(6).padStart(10)}   ${(ascii(x.l.hz).replace(/[^A-Za-z0-9+_-]/g, "") || "layer").slice(0, 24)}`)];
     return { text: lines.join(CRLF) + CRLF, L, cn, rew, g };
   }
   W.aquacrop = ctx => {
     const { site } = ctx, b = baseName(site), files = [], info = [], notes = [];
     if (ctx.wx) {
-      const w = complete(ctx.wx, ["srad", "prcp", "et0"]), [y, m, d] = ymdOf(w.days[0]);
+      const w = gapFree("aquacrop", ctx.wx), [y, m, d] = ymdOf(w.days[0]);
       if (badText(w)) notes.push(badText(w));
       const desc = ascii(`${srcLabel(ctx.wx)} at ${site.lat.toFixed(4)}, ${site.lon.toFixed(4)} (WindGuard TX)`);
       const head = title => [desc, `${String(1).padStart(6)}  : Daily records (1=daily, 2=10-daily and 3=monthly data)`, `${String(d).padStart(6)}  : First day of record (1, 11 or 21 for 10-day or 1 for months)`,
@@ -948,16 +1080,17 @@
         `${b}_aquacrop_ospy.txt: the same days for AquaCrop-OSPy (Python; prepare_weather reads Day Month Year Tmin Tmax Prcp Et0).`);
     }
     if (ctx.soil) {
-      const s = aquaSol(ctx.soil), H = soilRows(ctx.soil), lay = layering(ctx.soil, `${b}.SOL`, s.L, hzOf(ctx.soil), H.length > 5 ? mergedText("AquaCrop", 5, H.length) : "");
+      const s = aquaSol(ctx.soil), H = soilRows(ctx.soil), lay = layering(ctx.soil, `${b}.SOL`, s.L, hzOf(ctx.soil), [H.length > 5 ? mergedText("AquaCrop", 5, H.length) : "", rootNote(s.L, "penetrability 100%")]);
       files.push({ name: `${b}.SOL`, text: s.text });
       notes.push(...lay.notes);
       info.push(`${b}.SOL: soil ${ctx.soil.name} (${ctx.soil.source}).`, `  ${lay.text}`,
         `  SAT, FC, WP in vol % (saturated, 1/3-bar and 15-bar water); Ksat mm/day; CN ${s.cn} from ${s.g ? `hydrologic group ${s.g}` : "the top layer's Ksat"} (AquaCrop's own table, 5% initial abstraction); REW ${s.rew} mm;`,
         "  CRa and CRb from AquaCrop's soil classes; gravel 0 because the survey's water contents are for the whole soil; penetrability 100%, or 0 below a restrictive layer.");
     }
+    const use = and([ctx.wx ? "the .CLI as the climate file" : "", ctx.soil ? "the .SOL as the soil file" : ""].filter(Boolean)), readers = [ctx.wx ? "LoadClim" : "", ctx.soil ? "LoadProfile" : ""].filter(Boolean);
     files.push({ name: "README.txt", text: [`AquaCrop 7 files from WindGuard TX for ${site.name} (${site.lat.toFixed(5)}, ${site.lon.toFixed(5)}).`, "", ...info, "",
-      "Use them: copy the files into AquaCrop's DATA folder, then choose the .CLI as the climate file and the .SOL as the soil file.",
-      "File names have no spaces, as AquaCrop needs. Checked against the AquaCrop 7.3 manual tables and its Fortran readers (LoadClim, LoadProfile); not run in AquaCrop here."].join(CRLF) + CRLF });
+      ...(use ? [`Use ${ctx.wx ? "them: copy the files" : "it: copy the file"} into AquaCrop's DATA folder, then choose ${use}.`,
+        `File names have no spaces, as AquaCrop needs. Checked against ${ctx.soil ? "the AquaCrop 7.3 manual tables and its" : "AquaCrop 7.3's"} Fortran reader${readers.length > 1 ? "s" : ""} (${readers.join(", ")}); not run in AquaCrop here.`] : [])].join(CRLF) + CRLF });
     files.notes = notes;
     return files;
   };
@@ -991,6 +1124,6 @@
     return files;
   };
 
-  WG.writerUtil = { fit, fx, baseName, shortName, ymdOf, doyOf, short, ra, wp1Stats, swatWgn, windMonthly, mergeLayers, ok, CRLF, clean, complete, tavAmp, statGaps,
-    co2Of, CO2, soilRows, modelLayers, dssatStation, dssatSoilId, dssatLayers, apsimLayers, aquaClass, aquaCR, fieldLine, williamsK };
+  WG.writerUtil = { badText, fit, fx, baseName, shortName, ymdOf, doyOf, short, ra, wp1Stats, swatWgn, windMonthly, mergeLayers, ok, CRLF, clean, complete, tavAmp, statGaps,
+    co2Of, CO2, soilRows, writtenLayers, gapFree, filledVar, dssatStation, dssatSoilId, dssatLayers, apsimLayers, aquaClass, aquaCR, fieldLine, williamsK };
 })();

@@ -17,16 +17,18 @@ WG.preview = (function () {
     { id: "wind", name: "Wind", q: "wind", zero: true, lines: [["wind10", "Wind at 10 m", C.ink]] },
     { id: "et0", name: "Grass ET₀", q: "precip", sum: true, lines: [["et0", "Grass ET₀", C.orange]] },
   ];
-  /* what the soil tab can draw for one model's layers */
+  /* what the soil tab can draw for one model's layers, each card with the lines its file holds (title: the card's
+     name from those lines) */
   const SOIL = [
     { name: "Sand, silt and clay", unit: "%", stack: true, lines: [["sand", "Sand", "#d9b36c"], ["silt", "Silt", "#a98a62"], ["clay", "Clay", "#6f4f37"]] },
-    { name: "Water: wilting point, field capacity, saturation", unit: "cm³/cm³", d: 3, lines: [["ll", "Wilting point", C.orange], ["dul", "Field capacity", C.blue], ["sat", "Saturation", "#7fb0d6"]] },
-    { name: "Organic matter", unit: "%", lines: [["om", "Organic matter", C.green]] },
+    { title: ls => `Water: ${ls.map(l => l[1].toLowerCase()).join(", ")}`, unit: "cm³/cm³", d: 3,
+      lines: [["ll", "Wilting point", C.orange], ["dul", "Field capacity", C.blue], ["sat", "Saturation", "#7fb0d6"], ["awc", "Available water", C.green]] },
+    { title: ls => ls.map((l, i) => (i ? l[1].toLowerCase() : l[1])).join(" and "), unit: "%", lines: [["om", "Organic matter", C.green], ["oc", "Organic carbon", C.ink]] },
     { name: "Bulk density", unit: "g/cm³", lines: [["bd", "Bulk density", C.ink]] },
     { name: "Saturated conductivity", q: "ksat", per: 1 / 3.6, d: 3, lines: [["ksat", "Ksat", C.blue]] },
     { name: "pH", unit: "", lines: [["ph", "pH", C.red]] },
   ];
-  const view = { tab: "weather", step: null, as: "auto", filled: false, off: {}, model: null, file: null };
+  const view = { tab: "weather", step: null, as: "auto", filled: false, gap: null, off: {}, model: null, file: null };
   let job = null, box = null, ids = [];
 
   const rd = (v, d = 2) => (Number.isFinite(v) ? +v.toFixed(d) : null);
@@ -73,12 +75,16 @@ WG.preview = (function () {
     });
     return { v: how === "mean" ? s.map((x, k) => (x === null ? null : x / n[k])) : s, n };
   }
-  /* the gap-free copy that DSSAT, APSIM and AquaCrop get, on the days of the series */
+  /* the gap-free copy that the chosen one of DSSAT, APSIM and AquaCrop gets, from its writer's own function (c.holds:
+     the daily variables its files hold), on the days of the series; null without one */
+  const gapModels = () => job.models.filter(m => GAPLESS.includes(m));
   function gapFree(wx) {
-    if (job.gapFree !== undefined) return job.gapFree;
-    let c = null;
-    try { if (job.models.some(m => GAPLESS.includes(m))) c = U.complete(wx, ["srad", "prcp", "et0", "wind2"]); } catch (e) { /* no Tmax and Tmin */ }
-    return (job.gapFree = c);
+    const ms = gapModels();
+    if (!ms.length) return null;
+    if (!ms.includes(view.gap)) view.gap = ms[0];
+    const kept = job.gapFree || (job.gapFree = {});
+    if (!(view.gap in kept)) { kept[view.gap] = null; try { kept[view.gap] = U.gapFree(view.gap, wx); } catch (e) { /* no Tmax and Tmin */ } }
+    return kept[view.gap];
   }
   const onDays = (c, k, days) => {
     const ix = new Map(c.days.map((d, i) => [d, i]));
@@ -87,22 +93,26 @@ WG.preview = (function () {
   function weatherTab(el) {
     const wx = job.clean || (job.clean = U.clean(job.ctx.wx)), n = wx.days.length, c = gapFree(wx);
     if (!view.step) view.step = n <= 400 ? "day" : n <= 4400 ? "month" : "year";
-    const step = view.step, B = buckets(wx.days, step), filled = view.filled && !!c, shown = step === "day" ? n : B.labels.length;
+    // the overlay is offered when the copy differs from the series (days filled or cut at either end), or to choose between models,
+    // and drawn only while it is offered
+    const ms = gapModels(), done = c ? c.completed || {} : {}, anyFill = !!c && (ms.length > 1 || Object.keys(done).some(k => c.holds.includes(U.filledVar(k))) || c.cut.head + c.cut.tail > 0);
+    const step = view.step, B = buckets(wx.days, step), filled = view.filled && anyFill, shown = step === "day" ? n : B.labels.length;
+    const holds = k => !!c && c.holds.includes(k), gapName = c ? job.names[view.gap] : "";
     const hasAny = k => wx[k] && wx[k].some(ok);
     const vars = WX.filter(v => v.lines.some(([k]) => hasAny(k)));
-    const source = wx.source === "gridmet" ? "gridMET" : wx.source === "power" ? "NASA POWER" : String(wx.source || "").replace(/^file /, "");
+    const source = wx.source === "gridmet" ? "gridMET" : wx.source === "power" ? "NASA POWER" : wx.source === "prism" ? `PRISM${wx.rest ? ` with ${wx.rest}` : ""}` : String(wx.source || "").replace(/^file /, "");
     const span = `${source} · ${Wd.dayLabel(wx.days[0])} – ${Wd.dayLabel(wx.days[n - 1])}`;
     const cards = vars.filter(v => !view.off[v.id]).map(v => {
       const how = v.sum ? "sum" : "mean", kind = view.as === "auto" ? (v.sum ? "bar" : "line") : view.as, u = unitOf(v);
-      const lines = v.lines.map(([k, label, color]) => (filled && k === "wind10" ? ["wind2", "Wind at 2 m", color] : [k, label, color]));
+      const lines = v.lines.map(([k, label, color]) => (filled && k === "wind10" && holds("wind2") ? ["wind2", "Wind at 2 m", color] : [k, label, color]));
       const axis = v.sum ? `${u} per ${step}` : step === "day" ? u : `${u}, ${MEAN_NAME[step]}`;
       const build = () => {
         const ds = [];
         lines.forEach(([k, label, color]) => {
           const p = perStep(wx[k], B, how);
           ds.push({ label, data: p.v.map(x => inUnits(v, x)), order: 1, grouped: !filled, ...lineStyle(color, shown), ...(shown > 60 && kind === "bar" ? { barPercentage: 1, categoryPercentage: 1 } : { borderRadius: 2 }), _n: p.n });
-          if (filled && c[k] && ["tmax", "tmin", "srad", "prcp", "et0", "wind2"].includes(k)) {
-            ds.push({ label: `${label}, gap-free copy`, data: perStep(onDays(c, k, wx.days), B, how).v.map(x => inUnits(v, x)), order: 2, grouped: false, ...lineStyle(FILLED, shown), pointRadius: 0, borderWidth: 2, ...(shown > 60 && kind === "bar" ? { barPercentage: 1, categoryPercentage: 1 } : {}) });
+          if (filled && c[k] && holds(k)) {
+            ds.push({ label: `${label}, in the ${gapName} files`, data: perStep(onDays(c, k, wx.days), B, how).v.map(x => inUnits(v, x)), order: 2, grouped: false, ...lineStyle(FILLED, shown), pointRadius: 0, borderWidth: 2, ...(shown > 60 && kind === "bar" ? { barPercentage: 1, categoryPercentage: 1 } : {}) });
           }
         });
         return { type: kind, data: { labels: B.labels, datasets: ds },
@@ -115,31 +125,32 @@ WG.preview = (function () {
       };
       return card(`${v.name}, ${step === "day" ? "daily" : step === "month" ? "by month" : "by year"}`, build, 170, { x: "Date", sub: `${siteOf()} · ${span}`, file: `preview_${v.id}_${step}` });
     });
-    // the same numbers as a table: days with data, gaps, range, and what the gap-free copy fills
-    const fillCount = { tmax: "tmax", tmin: "tmin", prcp: "prcp", srad: "srad", wind10: "wind2", et0: "et0" }, done = c ? c.completed || {} : {};
+    // the same numbers as a table: days with data, gaps, range, and the days the chosen model's gap-free copy fills, of what its files hold
+    const fillCount = { tmax: "tmax", tmin: "tmin", prcp: "prcp", srad: "srad", tdew: "tdew", wind10: "wind2", et0: "et0" };
+    const filledOf = k => { const f = fillCount[k]; return f && holds(f) ? ((done[f] || 0) + (done[`${f}Month`] || 0)).toLocaleString() : "–"; };
     const rows = WX.flatMap(v => v.lines.map(([k, label]) => {
       const a = (wx[k] || []).filter(ok), u = unitOf(v), f = x => (a.length ? fmt(inUnits(v, x), 2) : "–"), tot = a.reduce((s, x) => s + x, 0);
       const lo = a.reduce((m, x) => Math.min(m, x), Infinity), hi = a.reduce((m, x) => Math.max(m, x), -Infinity);
       const total = v.sum && a.length ? `${fmt(inUnits(v, tot), 1)}${n >= 730 ? ` (${fmt(inUnits(v, (tot * 365.25) / a.length), 1)} a year)` : ""}` : "";
       return `<tr><td>${esc(label)}${u ? ` <small>${esc(u)}</small>` : ""}</td><td>${a.length.toLocaleString()}</td><td>${(n - a.length).toLocaleString()}</td>`
         + `<td>${f(lo)}</td><td>${f(tot / (a.length || 1))}</td><td>${f(hi)}</td><td>${total}</td>`
-        + `${c ? `<td>${fillCount[k] ? (done[fillCount[k]] || 0).toLocaleString() : "–"}</td>` : ""}</tr>`;
+        + `${c ? `<td>${filledOf(k)}</td>` : ""}</tr>`;
     }));
-    const anyFill = c && Object.keys(done).length > 0;
+    const gapPick = ms.length > 1 ? `<label class="pv-lab"><select id="pvGap" aria-label="Model whose gap-free copy is shown">${ms.map(m => `<option value="${m}" ${m === view.gap ? "selected" : ""}>${esc(job.names[m])}</option>`).join("")}</select></label>` : "";
     el.innerHTML = `<p class="fine">${esc(span)}: ${n.toLocaleString()} days, as they go into the files. A break in a line is a day without data.</p>
       <div class="pv-tools"><span class="pv-lab">Step</span>${seg("step", Object.entries(STEP_NAME), step)}${drawAs()}</div>
       <div class="pv-vars">${vars.map(v => `<label><input type="checkbox" data-pv-var="${v.id}" ${view.off[v.id] ? "" : "checked"}> ${esc(v.name)}</label>`).join("")}</div>
-      ${anyFill ? `<label class="pv-vars"><span><input type="checkbox" id="pvFilled" ${filled ? "checked" : ""}> Also show the gap-free copy that ${esc(job.models.filter(m => GAPLESS.includes(m)).map(m => job.names[m]).join(", "))} get${job.models.filter(m => GAPLESS.includes(m)).length > 1 ? "" : "s"}, in orange</span></label>` : ""}
+      ${anyFill ? `<div class="pv-vars"><label><input type="checkbox" id="pvFilled" ${filled ? "checked" : ""}> Also show, in orange, the gap-free copy in the ${gapPick ? "files of" : `${esc(gapName)} files`}</label>${gapPick}</div>` : ""}
       <div class="pv-grid">${cards.join("") || `<p class="fine">Tick something to draw.</p>`}</div>
-      <div class="table-wrap"><table class="grid pv-table"><thead><tr><th>Daily values</th><th>Days with data</th><th>Missing</th><th>Lowest</th><th>Mean</th><th>Highest</th><th>Total</th>${c ? "<th>Filled in the gap-free copy</th>" : ""}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+      <div class="table-wrap"><table class="grid pv-table"><thead><tr><th>Daily values</th><th>Days with data</th><th>Missing</th><th>Lowest</th><th>Mean</th><th>Highest</th><th>Total</th>${c ? `<th>Filled in the ${esc(gapName)} files <small>(– not in them)</small></th>` : ""}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
   }
 
   /* ---------- soil ---------- */
-  const depth = v => UN.num("depth", v);
+  const depth = v => +UN.conv("depth", v).toFixed({ in: 2, cm: 1, mm: 0 }[UN.sym("depth")] ?? 1); // as in the depth box: 2.5 cm is not 3
   function soilCard(x, L, kindAuto) {
     const kind = view.as === "auto" ? kindAuto : view.as, u = unitOf(x), lines = x.lines.filter(([k]) => L.some(l => ok(l[k])));
     if (!lines.length) return "";
-    const du = UN.sym("depth"), labels = L.map(l => `${depth(l.top)}–${depth(l.bot)}`), xTitle = u || x.name;
+    const title = x.title ? x.title(lines) : x.name, du = UN.sym("depth"), labels = L.map(l => `${depth(l.top)}–${depth(l.bot)}`), xTitle = u || title;
     const build = () => {
       if (kind === "bar") {
         return { type: "bar", data: { labels, datasets: lines.map(([k, label, color]) => ({ label, data: L.map(l => inUnits(x, l[k])), backgroundColor: color, borderColor: color, ...(x.stack ? { stack: "s" } : {}) })) },
@@ -155,28 +166,31 @@ WG.preview = (function () {
     };
     const table = () => ({ header: [`Layer (${du})`, ...lines.map(([, label]) => `${label}${u ? ` (${u})` : ""}`)], rows: L.map((l, i) => [labels[i], ...lines.map(([k]) => inUnits(x, l[k]))]) });
     const name = (job.names[view.model] || "soil table").split(" ")[0];
-    return card(x.name, build, kind === "bar" ? Math.max(170, 56 + (x.stack ? 18 : 12 * lines.length + 6) * L.length) : 200, { sub: `${siteOf()} · ${job.ctx.soil.name} · ${view.model === "table" ? "soil table" : `layers of the ${name} file`}`, table, file: `preview_soil_${view.model}` });
+    return card(title, build, kind === "bar" ? Math.max(170, 56 + (x.stack ? 18 : 12 * lines.length + 6) * L.length) : 200, { sub: `${siteOf()} · ${job.ctx.soil.name} · ${view.model === "table" ? "soil table" : `layers of the ${name} file`}`, table, file: `preview_soil_${view.model}` });
   }
   function soilTab(el) {
     const s = job.ctx.soil, sets = job.models.filter(m => m !== "csv").map(m => [m, job.names[m]]);
     if (job.models.includes("csv") || job.series.includes("soil")) sets.push(["table", "Plain CSV and soil table"]);
     if (!sets.some(x => x[0] === view.model)) view.model = sets[0][0];
+    // a model's layers with the values its file holds, from its writer (the table: the layers as they are)
     let L = null, why = "";
-    try { L = view.model === "table" ? s.layers : U.modelLayers(view.model, s); } catch (e) { why = e.message; }
+    try { L = view.model === "table" ? s.layers : U.writtenLayers(view.model, s); } catch (e) { why = e.message; }
     if (!L || !L.length) { el.innerHTML = `<p class="fine">No layers to show: ${esc(why || "the soil has none")}.</p>`; return; }
     const cards = SOIL.map(x => soilCard(x, L, x.stack ? "bar" : "line")).join("");
     const du = UN.sym("depth"), cell = (x, k, l) => { const v = inUnits(x, l[k]); return v === null ? "–" : v.toLocaleString(undefined, { maximumFractionDigits: x.d ?? 2 }); };
-    const cols = SOIL.flatMap(x => x.lines.map(([k, label]) => [x, k, label]));
-    const rows = L.map(l => `<tr><td>${depth(l.top)}–${depth(l.bot)}</td>${cols.map(([x, k]) => `<td>${cell(x, k, l)}</td>`).join("")}<td>${ok(l.caco3) ? fmt(l.caco3, 1) : "–"}</td><td>${ok(l.cfVol) ? fmt(l.cfVol, 1) : "–"}</td></tr>`).join("");
+    // the columns the file holds
+    const MORE = { unit: "%", d: 1 }, cols = [...SOIL.flatMap(x => x.lines.map(([k, label]) => [x, k, label])), [MORE, "caco3", "CaCO₃"], [{ ...MORE, unit: "% volume" }, "cfVol", "Coarse fragments"],
+      [{ ...MORE, unit: "% weight" }, "cfWt", "Coarse fragments"]].filter(([, k]) => L.some(l => ok(l[k])));
+    const rows = L.map(l => `<tr><td>${depth(l.top)}–${depth(l.bot)}</td>${cols.map(([x, k]) => `<td>${cell(x, k, l)}</td>`).join("")}</tr>`).join("");
     el.innerHTML = `<p class="fine">${esc(s.name)}, ${esc(s.source)}.</p>
       <div class="pv-tools"><label class="pv-lab">Layers as written for <select id="pvModel">${sets.map(([k, n]) => `<option value="${k}" ${k === view.model ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>${drawAs()}</div>
-      <p class="fine">${L.length} layer${L.length > 1 ? "s" : ""}, ${depth(L[0].top)} to ${depth(L[L.length - 1].bot)} ${esc(du)}.</p>
+      <p class="fine">${L.length} layer${L.length > 1 ? "s" : ""}, ${depth(L[0].top)} to ${depth(L[L.length - 1].bot)} ${esc(du)}${view.model === "table" ? "" : `, with the values the ${esc(job.names[view.model])} file holds`}.</p>
       <div class="pv-grid">${cards}</div>
-      <div class="table-wrap"><table class="grid pv-table"><thead><tr><th>Layer <small>${esc(du)}</small></th>${cols.map(([x, , label]) => `<th>${esc(label)}${unitOf(x) ? ` <small>${esc(unitOf(x))}</small>` : ""}</th>`).join("")}<th>CaCO₃ <small>%</small></th><th>Coarse fragments <small>% volume</small></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <div class="table-wrap"><table class="grid pv-table"><thead><tr><th>Layer <small>${esc(du)}</small></th>${cols.map(([x, , label]) => `<th>${esc(label)}${unitOf(x) ? ` <small>${esc(unitOf(x))}</small>` : ""}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   /* ---------- wind ---------- */
-  const wantsWind = () => job.series.some(k => ["hourly", "monthly", "annual"].includes(k)) || job.models.some(m => m === "epic" || m === "apex");
+  const wantsWind = () => job.series.some(k => ["hourly", "monthly", "annual"].includes(k)) || (!!job.ctx.wx && job.models.some(m => m === "epic" || m === "apex"));
   // the hourly series by local day, also the days without data
   function windDays(raw) {
     if (job.windDays) return job.windDays;
@@ -266,6 +280,7 @@ WG.preview = (function () {
       const t = e.target;
       if (t.dataset.pvVar) { view.off[t.dataset.pvVar] = !t.checked; draw(`[data-pv-var="${t.dataset.pvVar}"]`); }
       else if (t.id === "pvFilled") { view.filled = t.checked; draw("#pvFilled"); }
+      else if (t.id === "pvGap") { view.gap = t.value; draw("#pvGap"); }
       else if (t.id === "pvModel") { view.model = t.value; draw("#pvModel"); }
       else if (t.id === "pvFile") { view.file = t.value; draw("#pvFile"); }
     };

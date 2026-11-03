@@ -5,34 +5,44 @@ WG.datasheet = (function () {
   const { $, $$, esc, fmt, toast, num } = WG.util;
   const UN = WG.units, X = WG.export, Wd = WG.wind, M = WG.models, D = WG.downloads, T = WG.templates;
   const state = WG.state;
-  // the user's weather file: its text, read again at Download with the units chosen then, and the parse made on loading
-  let userWxSrc = null, userWx = null;
+  // the user's weather file: { name, text, at: where it was loaded, n: which load }; the text is read again at Download
+  // with the units chosen then, and userWx is the parse made on loading
+  let userWxSrc = null, userWx = null, wxLoads = 0;
   // the user's own soil layers and the location they were made for
   let userSoilRows = null, userSoilSite = null;
   // the download in progress: its location's token and status line, shown again when the sheet is re-rendered
   let running = null;
   let gmLast = null, gmAsked = false; // gridMET's last day, once read
 
+  // [key, name, its weather files, its soil files]
   const MODELS = [
-    ["dssat", "DSSAT 4.8", "Weather .WTH (one file per year) and soil WG.SOL"],
-    ["swatplus", "SWAT+", "Weather station files (pcp, tmp, slr, hmd, wnd and .cli lists), soils.sol and a user soil table"],
-    ["epic", "EPIC", "Daily weather .DLY, monthly statistics .WP1, wind .WND and soil .SOL"],
-    ["apex", "APEX", "Daily weather .DLY, monthly statistics .WP1, wind .WND and soil .SOL"],
-    ["apsim", "APSIM", "Weather .met (with CO₂) and soil .apsimx"],
-    ["aquacrop", "AquaCrop 7", "Climate .CLI with temperature, rain and ET₀ files, soil .SOL, and an AquaCrop-OSPy weather file"],
-    ["csv", "Plain CSV", "Daily weather and soil layers with units, for any model"],
+    ["dssat", "DSSAT 4.8", "Weather .WTH, one file per year", "Soil WG.SOL"],
+    ["swatplus", "SWAT+", "Station files (pcp, tmp, slr, hmd, wnd and .cli lists)", "soils.sol and a user soil table"],
+    ["epic", "EPIC", "Daily .DLY, monthly statistics .WP1 and wind .WND", "Soil .SOL"],
+    ["apex", "APEX", "Daily .DLY, monthly statistics .WP1 and wind .WND", "Soil .SOL"],
+    ["apsim", "APSIM", "Weather .met, with CO₂", "Soil .apsimx"],
+    ["aquacrop", "AquaCrop 7", "Climate .CLI with temperature, rain and ET₀ files, and an AquaCrop-OSPy file", "Soil .SOL"],
+    ["century", "CENTURY 4.0 and 4.5", "Monthly weather .wth", "Site file .100 for each version, which also holds climate lines"],
+    ["csv", "Plain CSV", "Daily weather with units, for any model", "Soil layers with units, for any model"],
   ];
+  // [key, name, the tabs that have it]
   const SERIES = [
-    ["hourly", "Hourly wind (the series in use)"], ["daily", "Daily weather (the range above)"], ["monthly", "Monthly summary"],
-    ["annual", "Annual summary"], ["soil", "Soil horizons"],
+    ["hourly", "Hourly wind (the series in use)", "weather"], ["daily", "Daily weather (the range above)", "weather"], ["monthly", "Monthly summary", "weather"],
+    ["annual", "Annual summary", "weather"], ["soil", "Soil horizons", "soil"],
   ];
+  // the sheet's tabs: what a download holds
+  const TABS = [["weather", "Weather files"], ["soil", "Soil files"], ["both", "Both together"]];
+  const seriesOn = (k, t) => t === "both" || SERIES.find(x => x[0] === k)[2] === t;
+  const modelText = (m, t) => (t === "weather" ? m[2] : t === "soil" ? m[3] : `${m[2]}; ${m[3].charAt(0).toLowerCase()}${m[3].slice(1)}`);
   const MODEL_NAME = Object.fromEntries(MODELS), SERIES_NAME = Object.fromEntries(SERIES);
   const TABLE = { hourly: "hourly_wind", daily: "daily_weather", monthly: "monthly_summary", annual: "annual_summary", soil: "soil_layers" };
 
   // common sets of layer bottoms (cm) for the custom-depth box
   const DEPTH_SETS = [["SoilGrids", [5, 15, 30, 60, 100, 200]], ["DSSAT", [5, 15, 30, 45, 60, 90, 120, 150, 180, 210]], ["10 cm steps to 1 m", [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]]];
   // inches need 2 decimals to come back to the same 0.1 cm (78.74 in = 200.0 cm; 78.7 in would be 199.9)
-  const depthText = cm => cm.map(v => +UN.conv("depth", v).toFixed({ in: 2, cm: 1, mm: 0 }[UN.sym("depth")] ?? 1)).join(", ");
+  const depthDp = () => ({ in: 2, cm: 1, mm: 0 }[UN.sym("depth")] ?? 1);
+  const depthOf = v => +UN.conv("depth", v).toFixed(depthDp());
+  const depthText = cm => cm.map(depthOf).join(", ");
   /* the layer bottoms typed in the depth unit of the units table, as cm */
   function depthsCm() {
     const raw = ($("#dlDepths").value || "").split(/[,;\s]+/).filter(Boolean);
@@ -51,30 +61,44 @@ WG.datasheet = (function () {
     checkStale();
     const mode = $("#dlLayers").value;
     $("#dlDepthBox").hidden = mode !== "custom";
-    if (mode === "model") { box.textContent = "DSSAT splits the horizons at 5, 15, 30, 45, 60, 90 … cm and APSIM uses 15, 15, 30, 30 … cm layers; AquaCrop merges them to 5, APEX to 10 and EPIC to 15; SWAT+ and the tables keep the horizons."; return; }
     let soil, L;
     try { soil = chosenSoil(); L = soil ? usableRows(soil) : []; } catch (e) { box.textContent = e.message; return; }
-    if (!L.length) { box.textContent = "No layers to write."; return; }
-    const z = v => UN.num("depth", v), u = UN.sym("depth"), rl = soil.relayer;
+    const told = (soil && soil.notes ? soil.notes : []).filter(n => !(userSoilRows && userSoilRows.notes && userSoilRows.notes.includes(n))).join(" "); // the editor shows its file's notes
+    if (mode === "model") { box.textContent = `DSSAT splits the horizons at 5, 15, 30, 45, 60, 90 … cm and APSIM uses 15, 15, 30, 30 … cm layers; AquaCrop merges them to 5, APEX to 10 and EPIC to 15; CENTURY averages them on its 15, 15, 15, 15, 30, 30, 30, 30 cm; SWAT+ and the tables keep the horizons.${told ? ` ${told}` : ""}`; return; }
+    if (!L.length) { box.textContent = `No layers to write.${told ? ` ${told}` : ""}`; return; }
+    const z = depthOf, u = UN.sym("depth"), rl = soil.relayer;
     box.textContent = `${L.length} layer${L.length > 1 ? "s" : ""} (${u}): ${L.map(l => `${z(l.top)}–${z(l.bot)}`).join(", ")}.`
       + (rl && rl.cut !== null ? ` The profile ends at ${z(rl.cut)} ${u} (bedrock or a cemented layer).` : "")
-      + (rl && rl.extendedBelow !== null ? ` Below ${z(rl.extendedBelow)} ${u} the survey has no horizons, so the deepest one is repeated.` : "")
-      + (L.length > 5 ? ` AquaCrop takes at most 5 layers${L.length > 10 ? ", APEX 10" : ""}${L.length > 15 ? ", EPIC 15" : ""}${L.length > 20 ? ", DSSAT 20" : ""}; those files merge the thinnest neighbours.` : "");
+      + (rl && rl.extendedBelow !== null ? ` Below ${z(rl.extendedBelow)} ${u} ${soil.mukey ? "the survey has no horizons" : "your profile has no layers"}, so the deepest one is repeated.` : "")
+      + (L.length > 5 ? ` AquaCrop takes at most 5 layers${L.length > 10 ? ", APEX 10" : ""}${L.length > 15 ? ", EPIC 15" : ""}${L.length > 20 ? ", DSSAT 20" : ""}; those files merge the thinnest neighbours.` : "")
+      + (told ? ` ${told}` : "");
   }
 
+  const NO_LAYER = "Your profile has no complete layer: each needs a bottom depth, sand and clay.";
   /* the layers the model files can use, or a plain message when the soil has none (urban land, rock outcrop) */
   function usableRows(soil) {
     try { return WG.writerUtil.soilRows(soil); }
-    catch (e) { throw new Error(`The survey gives no water retention or bulk density for ${soil.name}, so no model soil can be made from it: choose another component, or “My own soil profile…”.`); }
+    catch (e) { throw new Error(soil.mukey ? `The survey gives no water retention or bulk density for ${soil.name}, so no model soil can be made from it: choose another component, or “My own soil profile…”.` : NO_LAYER); }
+  }
+  // the survey has not answered yet: the page's soil panel keeps its placeholders until it does, and a point without a
+  // map unit leaves state.soil null for good
+  const surveyLoading = () => !state.soil && !!$("#soilSummary .skeleton");
+  /* why the survey gives no soil here, or "": still loading, no map unit, a failed request or a map unit without soils */
+  function surveyGap() {
+    const s = state.soil, own = "choose “My own soil profile…”";
+    if (surveyLoading()) return `The soil survey is still loading: try again in a moment, or ${own}.`;
+    if (!s) return `The soil survey has no map unit at this point: for a soil, ${own}.`;
+    if (s.error) return `The soil survey request failed (${s.error}): pick the location again to retry, or ${own}.`;
+    return s.dominant ? "" : `The soil survey has no soil profile here: for a soil, ${own}.`;
   }
 
   /* the sheet's choices, kept when it is closed (for example to change the depth unit) and opened again */
-  let form = null;
+  let form = null, tab = "weather", leftFile = false; // leftFile: the sheet left the weather file for gridMET at another location
   const siteKey = () => `${state.site.lat},${state.site.lon}`;
   function keepForm() {
     if (!$("#dlLayers") || !state.site) return;
     const d = $("#dlLayers").value === "custom" ? depthsCm() : null;
-    form = { site: $("#dlFrom").dataset.site || siteKey(), wx: $("#dlWx").value, from: $("#dlFrom").value, to: $("#dlTo").value,
+    form = { tab, site: $("#dlFrom").dataset.site || siteKey(), wx: $("#dlWx").value, from: $("#dlFrom").value, to: $("#dlTo").value,
       soil: $("#dlSoil").value, layers: $("#dlLayers").value, depths: d && d.B ? d.B : form ? form.depths : null,
       models: $$("input[name=dlModel]:checked").map(i => i.value), series: $$("input[name=dlSeries]:checked").map(i => i.value),
       u: Object.fromEntries(["uT", "uP", "uS", "uW", "uWh"].map(k => [k, $("#" + k).value])), fill: $("#uFill").checked };
@@ -83,11 +107,13 @@ WG.datasheet = (function () {
   /* ---------- the days each weather source can give ---------- */
   const POWER_FIRST = Wd.epochDay(1981, 0, 1);
   const span = r => `${Wd.dayLabel(r.first)} – ${Wd.dayLabel(r.last)}`;
-  /* { first, last, name, what } of a source's record: gridMET from 1979 to its last day (about 2 days behind), NASA POWER
-     from 1981 to about 8 days ago, a file its own days (and gridMET's too when gaps are filled from it); null without a file */
+  /* { first, last, name, what } of a source's record: gridMET from 1979 to its last day (about 2 days behind), PRISM from
+     1981, NASA POWER from 1981 to about 8 days ago, a file its own days (and gridMET's too when gaps are filled from it); null without a file */
   function wxRange(src, fill, file) {
     const gm = { first: Wd.GM_DAY0, last: gmLast ?? Wd.today() - 3, name: "gridMET", what: "gridMET's record" };
     if (src === "gridmet") return gm;
+    // a calendar day holds PRISM's next date, which comes about a day after it ends; solar, humidity and wind are gridMET's
+    if (src === "prism") return { first: Wd.PRISM_DAY0, last: Math.min(gm.last, Wd.prismLast()), name: "PRISM", what: "PRISM's record" };
     if (src === "power") return { first: POWER_FIRST, last: Wd.today() - 8, name: "NASA POWER", what: "NASA POWER's record" };
     if (!file) return null;
     const f = file.days[0], l = file.days[file.days.length - 1];
@@ -95,10 +121,29 @@ WG.datasheet = (function () {
       : { first: f, last: l, name: file.name, what: `the days in ${file.name}` };
   }
   const loadedFile = () => (userWx ? { days: userWx.days, name: userWxSrc.name } : null);
+  /* the weather file belongs to the place it was loaded at: said wherever it is used at another location, or "" */
+  function wxAway() {
+    if (!userWxSrc || userWxSrc.at.key === siteKey()) return "";
+    const a = userWxSrc.at, b = state.site, r = Math.PI / 180;
+    const h = Math.sin((b.lat - a.lat) * r / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin((b.lon - a.lon) * r / 2) ** 2, km = 12742 * Math.asin(Math.sqrt(h));
+    return `${userWxSrc.name} was loaded at ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}, ${UN.fmt("distance", km, km < 10 ? 1 : 0)} from this location: its weather is written under this location's name and coordinates.`;
+  }
+  /* CENTURY's site file holds climate lines as well as the soil: in the soil tab, where they come from (as prepare reads
+     them: a file has no 10 years to give, so gridMET) and what Both together does instead */
+  function climNote() {
+    const box = $("#dlClimNote"), on = tab === "soil" && !!$("input[name=dlModel][value=century]:checked");
+    if (!box) return;
+    box.hidden = !on;
+    if (!on) return;
+    const v = $("#dlWx").value, src = { power: "NASA POWER", prism: "PRISM" }[v] || "gridMET";
+    box.textContent = `CENTURY's site file also holds climate lines: here they come from the last 10 complete years of ${src}, ${v === "file" ? "as your weather file is not used for them" : "the source chosen under Weather files"}. Both together takes them from the chosen dates instead when every month has 10 years in them, else from the same 10 years.`;
+  }
   /* the date inputs take the chosen source's range; Download moves dates outside it inside and says so */
   function dateLimits() {
     const r = wxRange($("#dlWx").value, $("#uFill").checked, loadedFile());
-    $("#dlRange").textContent = r ? `${r.name}: ${span(r)}` : "";
+    const prism = $("#dlWx").value === "prism" ? " Rain and temperature are PRISM's own; PRISM has no wind, so solar radiation, humidity and wind come from gridMET. Each calendar day holds PRISM's next date, to line up with them." : "";
+    $("#dlRange").textContent = r ? `${r.name}: ${span(r)}.${prism}` : "";
+    climNote();
     ["#dlFrom", "#dlTo"].forEach(s => { $(s).min = r ? Wd.isoDay(r.first) : ""; $(s).max = r ? Wd.isoDay(r.last) : ""; });
   }
   const fileDates = () => { $("#dlFrom").value = Wd.isoDay(userWx.days[0]); $("#dlTo").value = Wd.isoDay(userWx.days[userWx.days.length - 1]); };
@@ -108,18 +153,37 @@ WG.datasheet = (function () {
   function soilOptions() {
     const s = state.soil;
     const comps = s && !s.error && s.components ? s.components.filter(c => c.horizons && c.horizons.length) : [];
-    const none = comps.length ? "" : `<option value="" selected>${!s ? "Soil survey still loading…" : s.error ? "The soil survey could not be read" : "No survey soil here"}</option>`;
+    const none = comps.length ? "" : `<option value="" selected>${surveyLoading() ? "Soil survey still loading…" : s && s.error ? "The soil survey could not be read" : "No survey soil here"}</option>`;
     return none + comps.map(c => `<option value="${esc(c.cokey)}" ${s.dominant && c.cokey === s.dominant.cokey ? "selected" : ""}>${esc(c.compname)} · ${fmt(c.comppct_r, 0)}% of map unit${s.dominant && c.cokey === s.dominant.cokey ? " (dominant)" : ""}</option>`).join("")
       + `<option value="user">My own soil profile…</option>`;
   }
+  /* the survey can come in while the sheet is open: its soils are then offered, any choice made staying */
+  let surveyWatch = null;
+  function watchSurvey() {
+    clearTimeout(surveyWatch);
+    if (!surveyLoading()) return;
+    const tok = state.token;
+    surveyWatch = setTimeout(() => {
+      if (tok !== state.token || $("#dataSheet").hidden) return;
+      if (surveyLoading()) return watchSurvey();
+      const sel = $("#dlSoil"), was = sel.value;
+      sel.innerHTML = soilOptions();
+      if (was && [...sel.options].some(o => o.value === was)) sel.value = was;
+      keepForm();
+      layerInfo();
+    }, 1000);
+  }
   function render() {
+    noteOpened();
     const P = state.windPeriod || Wd.resolvePeriod(state.period, state.gridModel);
     $("#dataBody").innerHTML = `
+      <div class="seg dl-tabs" id="dlTabs">${TABS.map(([k, n]) => `<button data-dl-tab="${k}">${esc(n)}</button>`).join("")}</div>
       <p class="fine">Files for ${esc(state.place || "this location")} (${state.site.lat.toFixed(4)}, ${state.site.lon.toFixed(4)}). Model files use each model's own units; tables use the units chosen in the units table.</p>
-      <section class="data-sec"><h4>1 · Weather and dates</h4>
+      <section class="data-sec" id="dlSecWx"><h4>Weather and dates</h4>
         <div class="form-grid">
           <label>Weather from<select id="dlWx">
             <option value="gridmet">gridMET, 4 km (1979 on)</option>
+            <option value="prism">PRISM, 4 km (1981 on)</option>
             <option value="power">NASA POWER, 0.5° (1981 on)</option>
             <option value="file">My own daily weather file…</option></select></label>
           <label>From<input type="date" id="dlFrom" value="${P.from}" data-site="${siteKey()}"></label>
@@ -129,7 +193,7 @@ WG.datasheet = (function () {
         <div id="dlWxFile" hidden>
           ${T.box("weather")}
           <div class="form-grid">
-            <label>Your file<input type="file" id="dlWxIn" accept=".csv,.txt,.tsv,.xlsx,.xls"></label>
+            <label>Your file<input type="file" id="dlWxIn" accept=".csv,.txt,.tsv,.dat,.xlsx,.xls"></label>
             <label class="check"><input type="checkbox" id="uFill" checked> Fill gaps from gridMET</label>
           </div>
           <p class="fine dl-status" id="dlWxStatus"></p>
@@ -143,30 +207,34 @@ WG.datasheet = (function () {
           </div>
         </div>
       </section>
-      <section class="data-sec"><h4>2 · Soil</h4>
+      <section class="data-sec" id="dlSecSoil"><h4>Soil</h4>
         <div class="form-grid"><label>Soil profile<select id="dlSoil">${soilOptions()}</select></label>
           <label>Layers<select id="dlLayers"><option value="model">Each model's usual layers</option><option value="survey">The horizons as they are</option><option value="custom">Custom depths…</option></select></label></div>
         <div id="dlDepthBox" hidden>
           <div class="form-grid"><label>Bottom of each layer (${esc(UN.sym("depth"))})<input id="dlDepths" inputmode="decimal" value="${depthText(DEPTH_SETS[0][1])}"></label></div>
-          <p class="fine">Separate the depths with commas; the last one is the profile depth. Each layer takes the thickness-weighted mean of the horizons it covers.
+          <p class="fine">Separate the depths with commas; the last one is the profile depth. Each layer takes the thickness-weighted mean of the horizons it covers (organic matter, carbon, CaCO₃ and N by mass).
             Quick fill: ${DEPTH_SETS.map(([n, d]) => `<button class="link" data-depths="${d.join(",")}">${esc(n)} (${depthText(d)})</button>`).join(" · ")}</p>
         </div>
         <p class="fine dl-status" id="dlLayerInfo"></p>
         <div id="dlSoilEdit" hidden></div>
       </section>
-      <section class="data-sec"><h4>3 · Files</h4>
-        <div class="model-grid">${MODELS.map(([k, n, d]) => `<label><input type="checkbox" name="dlModel" value="${k}" ${k === "dssat" ? "checked" : ""}><span>${esc(n)}<small>${esc(d)}</small></span></label>`).join("")}</div>
+      <section class="data-sec"><h4>Files</h4>
+        <div class="model-grid">${MODELS.map(([k, n]) => `<label><input type="checkbox" name="dlModel" value="${k}" ${k === "dssat" ? "checked" : ""}><span>${esc(n)}<small data-model-text="${k}"></small></span></label>`).join("")}</div>
+        <p class="fine dl-status" id="dlClimNote" hidden></p>
         <h4>Tables and series (CSV)</h4>
-        <div class="model-grid">${SERIES.map(([k, n]) => `<label><input type="checkbox" name="dlSeries" value="${k}"><span>${esc(n)}</span></label>`).join("")}</div>
+        <div class="model-grid">${SERIES.map(([k, n]) => `<label data-series-row="${k}"><input type="checkbox" name="dlSeries" value="${k}"><span>${esc(n)}</span></label>`).join("")}</div>
       </section>
       <div class="area-actions"><button class="btn" id="dlPv">Preview</button><button class="btn primary" id="dlGo">Download</button><span class="fine dl-status" id="dlStatus"></span></div>
       <section class="data-sec" id="dlPvSec" hidden><h4>Preview: what the download will hold</h4>
-        <p class="fine dl-status" id="dlPvStale" hidden>You changed something since this preview. <button class="link" id="dlPvAgain">Preview again</button></p>
+        <p class="fine dl-status" id="dlPvStale" hidden>You changed something since this preview: <b>Download these files</b> saves the files shown, and <b>Download</b> above the form as it is now. <button class="link" id="dlPvAgain">Preview again</button></p>
         <div id="dlPvBox"></div>
         <div class="area-actions"><button class="btn primary" id="dlGo2">Download these files</button></div>
-      </section>`;
+      </section>
+      <p class="fine">For a whole field or farm rather than this point: <button class="link" id="dlToArea">draw or load an area</button>, then <b>Make a grid of this area</b> gives its soil and weather in cells from 20 cm up.</p>`;
+    $$("[data-dl-tab]").forEach(b => b.addEventListener("click", () => { tab = b.dataset.dlTab; showTab(); keepForm(); checkStale(); }));
+    $("#dlToArea").addEventListener("click", () => { D.close(); if ($("#areaSheet").hidden) $("#areaBtn").click(); });
     // switching to the file takes its dates; the units are applied when the files are made, so they need no re-read here
-    $("#dlWx").addEventListener("change", e => { const f = e.target.value === "file"; $("#dlWxFile").hidden = !f; if (f && userWx) fileDates(); dateLimits(); });
+    $("#dlWx").addEventListener("change", e => { const f = e.target.value === "file"; leftFile = false; $("#dlWxFile").hidden = !f; if (f && userWx) fileDates(); dateLimits(); });
     $("#uFill").addEventListener("change", dateLimits);
     T.wire("weather", $("#dlWxFile"));
     $("#dlWxIn").addEventListener("change", readWxFile);
@@ -176,7 +244,8 @@ WG.datasheet = (function () {
     $("#dlLayers").addEventListener("change", layerInfo);
     $("#dlDepths").addEventListener("input", layerInfo);
     $$("[data-depths]").forEach(b => b.addEventListener("click", () => { $("#dlDepths").value = depthText(b.dataset.depths.split(",").map(Number)); layerInfo(); keepForm(); }));
-    ["#dlGo", "#dlGo2"].forEach(s => $(s).addEventListener("click", () => run(build)));
+    $("#dlGo").addEventListener("click", () => run(build));
+    $("#dlGo2").addEventListener("click", () => work(saveShown));
     ["#dlPv", "#dlPvAgain"].forEach(s => $(s).addEventListener("click", () => run(preview)));
     // put back what the user chose last time; dates and soil only for the same location
     const same = !!form && form.site === siteKey();
@@ -189,16 +258,24 @@ WG.datasheet = (function () {
       if (form.depths) $("#dlDepths").value = depthText(form.depths);
       if (same) { $("#dlFrom").value = form.from; $("#dlTo").value = form.to; }
     }
-    const wxChoice = form ? form.wx : userWx ? "file" : "gridmet";
+    tab = form ? form.tab : tab;
+    let wxChoice = form ? form.wx : userWx ? "file" : "gridmet";
+    if (leftFile && userWx && userWxSrc.at.key === siteKey()) { wxChoice = "file"; leftFile = false; }
+    // at another location the sheet goes back to gridMET; the file stays one click away, and then says where it was loaded
+    const wxLeft = !same && wxChoice === "file" && !!userWx && userWxSrc.at.key !== siteKey();
+    if (wxLeft) { wxChoice = "gridmet"; leftFile = true; toast("Your weather file was loaded at another location, so this one starts from gridMET: “My own daily weather file…” brings it back."); }
     $("#dlWx").value = wxChoice;
     $("#dlWxFile").hidden = wxChoice !== "file";
-    if (userWx) $("#dlWxStatus").textContent = wxSummary(userWx, userWxSrc.name);
+    if (userWx) $("#dlWxStatus").textContent = wxStatus();
     if (!same && wxChoice === "file" && userWx) fileDates();
     if (same && [...$("#dlSoil").options].some(o => o.value === form.soil)) $("#dlSoil").value = form.soil;
     if ($("#dlSoil").value === "user") editSoil();
+    showTab();
     dateLimits();
     if (!gmAsked) { gmAsked = true; Wd.gridmetLast().then(v => { gmLast = v; dateLimits(); }).catch(() => {}); }
     layerInfo();
+    if (wxLeft) keepForm(); // the toast once: this location's choice is gridMET now
+    watchSurvey();
     if (running) {
       busy(true);
       $("#dlStatus").textContent = running.tok === state.token ? running.text : "Finishing the download for the previous location: it stops without saving.";
@@ -207,18 +284,27 @@ WG.datasheet = (function () {
     if (previewed && previewed.tok !== state.token) { previewed = null; WG.preview.clear(); }
     if (previewed) showPreview();
   }
+  /* the sheet for the tab chosen: its sections, what each model writes in it and the tables it has */
+  function showTab() {
+    $$("[data-dl-tab]").forEach(b => { b.classList.toggle("on", b.dataset.dlTab === tab); });
+    $("#dlSecWx").hidden = tab === "soil";
+    $("#dlSecSoil").hidden = tab === "weather";
+    MODELS.forEach(m => { $(`[data-model-text="${m[0]}"]`).textContent = modelText(m, tab); });
+    $$("[data-series-row]").forEach(l => { l.hidden = !seriesOn(l.dataset.seriesRow, tab); });
+    climNote();
+  }
   const busy = on => ["#dlGo", "#dlGo2", "#dlPv", "#dlPvAgain"].forEach(s => { if ($(s)) $(s).disabled = on; });
 
   /* ---------- the preview ---------- */
   let previewed = null; // { tok, key, job } of the preview on show
   // everything that changes what a download holds
-  const formKey = () => JSON.stringify([$$("input[name=dlModel]:checked").map(i => i.value), $$("input[name=dlSeries]:checked").map(i => i.value),
+  const formKey = () => JSON.stringify([tab, $$("input[name=dlModel]:checked").map(i => i.value), $$("input[name=dlSeries]:checked").filter(i => seriesOn(i.value, tab)).map(i => i.value),
     $("#dlWx").value, $("#dlFrom").value, $("#dlTo").value, $("#dlSoil").value, $("#dlLayers").value, $("#dlLayers").value === "custom" ? $("#dlDepths").value : "",
-    ...(userWxSrc && $("#dlWx").value === "file" ? [userWxSrc.name, userWxSrc.text.length, wxUnits(), $("#uFill").checked] : []),
+    ...(userWxSrc && $("#dlWx").value === "file" ? [userWxSrc.name, userWxSrc.n, wxUnits(), $("#uFill").checked] : []),
     ...($("#dlSoil").value === "user" ? [userSoilRows, userSoilRows && userSoilRows.meta] : []),
     UN.all()]);
   // the wind series a preview drew, if it drew any, is still the one in use
-  const sameWind = j => !(j.series.some(k => ["hourly", "monthly", "annual"].includes(k)) || j.models.some(m => m === "epic" || m === "apex")) || j.ctx.analysis === windNow().analysis;
+  const sameWind = j => !(j.series.some(k => ["hourly", "monthly", "annual"].includes(k)) || (j.ctx.wx && j.models.some(m => m === "epic" || m === "apex"))) || j.ctx.analysis === windNow().analysis;
   function checkStale() {
     if (previewed && $("#dlPvStale")) $("#dlPvStale").hidden = previewed.key === formKey() && sameWind(previewed.job);
   }
@@ -233,14 +319,19 @@ WG.datasheet = (function () {
   /* ---------- the user's weather ---------- */
   /* text of a CSV/TXT file, or of the first sheet of an Excel workbook (.xlsx/.xls, recognised by content) */
   const two = n => String(n).padStart(2, "0");
-  /* an Excel cell as stored, not as displayed: dates as YYYY-MM-DD, numbers in full, percentages as 0-100 */
+  /* an Excel cell as stored, not as displayed: dates as YYYY-MM-DD, followed by the time when its format shows hours or
+     it holds one (a Campbell TOA5 table is dated by its midnights), numbers in full, percentages as 0-100 */
   function xlsxCell(c, d1904) {
     if (!c || c.v === undefined || c.v === null || c.t === "e" || c.t === "z") return "";
-    if (c.v instanceof Date) return `${c.v.getFullYear()}-${two(c.v.getMonth() + 1)}-${two(c.v.getDate())}`;
+    const f = String(c.z || ""), bare = f.replace(/"[^"]*"|\\./g, ""), noTags = bare.replace(/\[[^\]]*\]/g, "");
+    const clock = s => (s > 0 || /h/i.test(noTags) ? ` ${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}${s % 60 ? `:${two(s % 60)}` : ""}` : "");
+    if (c.v instanceof Date) return `${c.v.getFullYear()}-${two(c.v.getMonth() + 1)}-${two(c.v.getDate())}${clock(c.v.getHours() * 3600 + c.v.getMinutes() * 60 + c.v.getSeconds())}`;
     if (c.t !== "n") return String(c.v);
-    const f = String(c.z || ""), bare = f.replace(/"[^"]*"|\\./g, "");
-    const isDate = XLSX.SSF && XLSX.SSF.is_date ? XLSX.SSF.is_date(f) : /[dmyh]/i.test(bare.replace(/\[[^\]]*\]/g, ""));
-    if (isDate) return Wd.isoDay(Math.floor(c.v + 1e-6) - 25569 + (d1904 ? 1462 : 0)); // Excel day number (1900 or 1904 system) to epoch day
+    const isDate = XLSX.SSF && XLSX.SSF.is_date ? XLSX.SSF.is_date(f) : /[dmyh]/i.test(noTags);
+    if (isDate) {
+      const day = Math.floor(c.v + 1e-6);
+      return Wd.isoDay(day - 25569 + (d1904 ? 1462 : 0)) + clock(Math.min(86399, Math.round(Math.max(0, c.v - day) * 86400))); // Excel day number (1900 or 1904 system) to epoch day
+    }
     return String(/%/.test(bare) ? c.v * 100 : c.v);
   }
   async function fileText(f) {
@@ -261,7 +352,7 @@ WG.datasheet = (function () {
   // the header each quantity was read from (a wrong match shows here), then what the reader noted about the file
   const COL_NAME = { date: "date", year: "year", month: "month", dom: "day", doy: "day of year", tmax: "Tmax", tmin: "Tmin", prcp: "rain", srad: "solar",
     rh: "humidity", rhmax: "RHmax", rhmin: "RHmin", tdew: "dew point", wind: "wind", et0: "ET0" };
-  const UNIT_NAME = { C: "°C", F: "°F", K: "K", mm: "mm", in: "inches", cm: "cm", MJ: "MJ/m²/day", W: "W/m²", ly: "langley/day", kWh: "kWh/m²/day", Wh: "Wh/m²/day", kJ: "kJ/m²/day", J: "J/m²/day", ms: "m/s", mph: "mph", kmh: "km/h", kn: "kn" };
+  const UNIT_NAME = { C: "°C", F: "°F", K: "K", mm: "mm", in: "inches", cm: "cm", MJ: "MJ/m²/day", W: "W/m²", kW: "kW/m²", ly: "langley/day", kWh: "kWh/m²/day", Wh: "Wh/m²/day", kJ: "kJ/m²/day", J: "J/m²/day", ms: "m/s", mph: "mph", kmh: "km/h", kn: "kn" };
   const unitNote = (w, k) => {
     const u = w.units && w.units[k], z = k === "wind" && w.windHeight ? ` at ${w.windHeight.z} m` : "";
     return u ? ` in ${UNIT_NAME[u.u] || u.u}${z}${u.stated && (k !== "wind" || w.windHeight.stated) ? "" : " (as set below)"}` : "";
@@ -276,24 +367,27 @@ WG.datasheet = (function () {
       ...readLines(w)].join(" ");
   };
   const wxUnits = () => ({ temp: $("#uT").value, prcp: $("#uP").value, srad: $("#uS").value, wind: $("#uW").value, windHeight: +$("#uWh").value });
+  const wxStatus = () => [wxSummary(userWx, userWxSrc.name), wxAway()].filter(Boolean).join(" ");
   async function readWxFile() {
     const f = $("#dlWxIn").files[0];
     if (!f) return;
+    $("#dlWxIn").value = ""; // the same file, corrected, can then be chosen again: browsers fire no change for the same path
     try {
       const text = await fileText(f);
       userWx = M.parseWeatherCSV(text, wxUnits(), state.site.lat, state.site.lon, state.elev ? state.elev.z : null);
-      userWxSrc = { name: f.name, text };
+      userWxSrc = { name: f.name, text, at: { lat: state.site.lat, lon: state.site.lon, key: siteKey() }, n: ++wxLoads };
       fileDates();
-      $("#dlWxStatus").textContent = wxSummary(userWx, f.name);
+      $("#dlWxStatus").textContent = wxStatus();
     } catch (e) { userWx = null; userWxSrc = null; $("#dlWxStatus").textContent = `Could not read ${f.name}: ${e.message}`; }
     dateLimits();
     keepForm(); // the dates were set after the input's change event saved the form
+    checkStale();
   }
   function rereadWx() {
     if (!userWxSrc) return;
     try {
       userWx = M.parseWeatherCSV(userWxSrc.text, wxUnits(), state.site.lat, state.site.lon, state.elev ? state.elev.z : null);
-      $("#dlWxStatus").textContent = wxSummary(userWx, userWxSrc.name);
+      $("#dlWxStatus").textContent = wxStatus();
     } catch (e) { $("#dlWxStatus").textContent = `Could not read ${userWxSrc.name}: ${e.message}`; }
   }
   /* the file read again with the units chosen now, at the download's location */
@@ -306,7 +400,13 @@ WG.datasheet = (function () {
 
   /* ---------- the user's soil ---------- */
   /* the user's layers belong to the location they were made for: elsewhere they start again from that location's
-     survey, and the name, hydrologic group, slope and albedo always come from the same source as the layers */
+     survey, and the name, hydrologic group, drainage class, slope, albedo, family and order always come from the same
+     source as the layers. */
+  const HYD_GROUPS = ["A", "B", "C", "D", "A/D", "B/D", "C/D"];
+  // what a survey horizon knows beyond the table, kept on its layer until a value it rests on is changed, so a profile
+  // left untouched writes as the survey does: root growth (0 below a restrictive layer), AWC, K factor, texture ...
+  const SURVEY_KEPT = ["srgf", "awc", "kf", "texture", "cfWt", "noBd"];
+  const REST_ON = { top: ["srgf"], bot: ["srgf"], sand: ["kf", "texture"], silt: ["kf", "texture"], clay: ["kf", "texture"], om: ["kf"], ll: ["awc"], dul: ["awc"], cfVol: ["cfWt"], bd: ["noBd"] };
   function editSoil() {
     if (userSoilRows && userSoilSite !== siteKey()) { userSoilRows = null; toast("Your own profile was made for another location, so this one starts from this location's survey."); }
     if (!userSoilRows) {
@@ -315,39 +415,49 @@ WG.datasheet = (function () {
       try { if (base) rows = WG.writerUtil.soilRows(base); } catch (e) { /* no horizon with water retention: all of them */ }
       // the horizons the model files would use: down to bedrock or a cemented layer, not the horizons below it
       userSoilRows = rows ? rows.map(l => ({ ...l })) : [{ top: 0, bot: 15 }, { top: 15, bot: 45 }, { top: 45, bot: 100 }];
-      userSoilRows.meta = { usName: base ? base.name : "My soil", usHg: (base && base.hydgrp) || "B",
-        usSlope: base && base.slope !== null ? base.slope : 1, usAlb: base && base.albedo !== null ? base.albedo : 0.13 };
+      userSoilRows.meta = { usName: base ? base.name : "My soil", usHg: (base && base.hydgrp) || "B", usDrain: (base && base.drainage) || "Well drained",
+        usSlope: base && base.slope !== null ? base.slope : 1, usAlb: base && base.albedo !== null ? base.albedo : 0.13,
+        family: base ? base.family : "", order: base ? base.order : "", from: base ? `started from the survey's ${base.name}, map unit ${base.mukey}` : "" };
       userSoilSite = siteKey();
     }
     const box = $("#dlSoilEdit"), meta = userSoilRows.meta;
     box.hidden = false;
+    const hg = HYD_GROUPS.includes(meta.usHg) ? meta.usHg : HYD_GROUPS.find(g => String(meta.usHg).startsWith(g)) || "B";
     const cell = (i, k) => { const v = userSoilRows[i][k]; return `<td><input data-r="${i}" data-k="${k}" inputmode="decimal" value="${v === null || v === undefined ? "" : typeof v === "number" ? +v.toFixed(["ll", "dul", "sat"].includes(k) ? 3 : 2) : esc(v)}"></td>`; };
-    box.innerHTML = `${T.box("soil")}<p class="fine">Starts from the survey's dominant soil, down to any bedrock or cemented layer; change any value, add or remove layers, or load your own lab results. Blank water retention, bulk density and Ksat are estimated from sand, clay and organic matter (Saxton &amp; Rawls 2006). In this table depths are in cm and Ksat in mm/h; a loaded file can be in the units its column names state. Water contents are for the whole soil, as the survey gives them: if yours are lab values for the fine earth and the layer has coarse fragments, multiply them by (1 − fragments % ÷ 100).</p>
+    box.innerHTML = `${T.box("soil")}<p class="fine">Starts from the survey's dominant soil, down to any bedrock or cemented layer, with no root growth below a restrictive layer until you change that layer's depths; change any value, add or remove layers, or load your own lab results. Blank water retention, bulk density and Ksat are estimated from sand, clay and organic matter (Saxton &amp; Rawls 2006). In this table depths are in cm and Ksat in mm/h; a loaded file can be in the units its column names state. Water contents are for the whole soil, as the survey gives them: if yours are lab values for the fine earth and the layer has coarse fragments, multiply them by (1 − fragments % ÷ 100).</p>
       <div class="table-wrap"><table class="grid soil-edit"><thead><tr>${M.SOIL_COLS.map(([, l]) => `<th>${esc(l)}</th>`).join("")}<th></th></tr></thead>
       <tbody>${userSoilRows.map((_, i) => `<tr>${M.SOIL_COLS.map(([k]) => cell(i, k)).join("")}<td><button class="link" data-del="${i}" aria-label="Remove layer">✕</button></td></tr>`).join("")}</tbody></table></div>
       ${userSoilRows.notes && userSoilRows.notes.length ? `<p class="fine">${esc(userSoilRows.notes.join(" "))}</p>` : ""}
       <div class="form-grid">
         <label>Soil name<input id="usName" value="${esc(meta.usName)}"></label>
-        <label>Hydrologic group<select id="usHg">${["A", "B", "C", "D"].map(g => `<option ${String(meta.usHg).startsWith(g) ? "selected" : ""}>${g}</option>`).join("")}</select></label>
+        <label>Hydrologic group<select id="usHg">${HYD_GROUPS.map(g => `<option ${g === hg ? "selected" : ""}>${g}</option>`).join("")}</select></label>
+        <label>Drainage class<select id="usDrain">${Object.keys(WG.soil.DRAIN).map(k => `<option ${k === String(meta.usDrain).toLowerCase() ? "selected" : ""}>${esc(cap(k))}</option>`).join("")}</select></label>
         <label>Slope (%)<input id="usSlope" inputmode="decimal" value="${esc(meta.usSlope)}"></label>
         <label>Dry albedo<input id="usAlb" inputmode="decimal" value="${esc(meta.usAlb)}"></label>
       </div>
       <div class="area-actions"><button class="btn small" id="usAdd">Add layer</button><button class="btn small" id="usTpl">Download these layers (CSV)</button><label class="btn small">Load my soil file<input type="file" id="usIn" accept=".csv,.txt,.tsv,.xlsx,.xls" hidden></label><button class="btn small" id="usReset">Back to the survey</button></div>`;
     T.wire("soil", box);
-    box.querySelectorAll("input[data-r]").forEach(inp => inp.addEventListener("change", e => { userSoilRows[+e.target.dataset.r][e.target.dataset.k] = e.target.value; layerInfo(); }));
-    ["usName", "usHg", "usSlope", "usAlb"].forEach(id => $("#" + id).addEventListener("change", e => { meta[id] = e.target.value; if (id === "usName") meta.named = true; }));
+    box.querySelectorAll("input[data-r]").forEach(inp => inp.addEventListener("change", e => {
+      const row = userSoilRows[+e.target.dataset.r], k = e.target.dataset.k;
+      row[k] = e.target.value;
+      (REST_ON[k] || []).forEach(x => { delete row[x]; });
+      layerInfo();
+    }));
+    ["usName", "usHg", "usDrain", "usSlope", "usAlb"].forEach(id => $("#" + id).addEventListener("change", e => { meta[id] = e.target.value; if (id === "usName") meta.named = true; }));
     box.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", e => { userSoilRows.splice(+e.target.dataset.del, 1); editSoil(); }));
     $("#usAdd").addEventListener("click", () => { const l = userSoilRows[userSoilRows.length - 1]; userSoilRows.push({ top: l ? num(l.bot) : 0, bot: l ? num(l.bot) + 30 : 30 }); editSoil(); });
     $("#usTpl").addEventListener("click", () => X.save(M.soilTemplateCSV({ layers: userSoilRows.map(x => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, num(v) ?? v]))) }), "soil_profile.csv", "text/csv;charset=utf-8"));
     $("#usIn").addEventListener("change", async e => {
       const f = e.target.files[0];
       if (!f) return;
+      e.target.value = ""; // the same file, corrected, can then be chosen again
       try {
         const rows = M.parseSoilCSV(await fileText(f));
-        rows.meta = { ...meta, usName: meta.named ? meta.usName : "My soil" }; // the file has layers only: the site values stay, the survey's name goes
+        rows.meta = { ...meta, usName: meta.named ? meta.usName : "My soil", family: "", order: "", from: "" }; // the file has layers only: the site values stay, the survey's name and class go
         userSoilRows = rows;
         editSoil();
-        toast(`${rows.length} layers loaded from ${f.name}.`);
+        const whole = rows.filter(x => num(x.bot) !== null && num(x.sand) !== null && num(x.clay) !== null).length;
+        toast(`${whole} layer${whole === 1 ? "" : "s"} loaded from ${f.name}${whole < rows.length ? `; ${rows.length - whole} incomplete row${rows.length - whole === 1 ? "" : "s"}, see the notes` : ""}.`);
       } catch (err) { toast(err.message); }
     });
     $("#usReset").addEventListener("click", () => { userSoilRows = null; editSoil(); });
@@ -358,11 +468,20 @@ WG.datasheet = (function () {
     const v = $("#dlSoil").value, e = state.elev;
     let soil;
     if (v === "user") {
-      soil = M.userSoil(userSoilRows || [], { name: $("#usName") ? $("#usName").value : "My soil", hydgrp: $("#usHg") ? $("#usHg").value : "B", slope: $("#usSlope") ? $("#usSlope").value : 1,
-        albedo: $("#usAlb") ? $("#usAlb").value : 0.13, lat: state.site.lat, lon: state.site.lon, elev: e ? e.z : null, id: "USER" });
+      const rows = userSoilRows || [], meta = rows.meta || {};
+      soil = M.userSoil(rows, { name: $("#usName") ? $("#usName").value : "My soil", hydgrp: $("#usHg") ? $("#usHg").value : "B", drainage: $("#usDrain") ? $("#usDrain").value : "Well drained", slope: $("#usSlope") ? $("#usSlope").value : 1,
+        albedo: $("#usAlb") ? $("#usAlb").value : 0.13, family: meta.family, texture: rows[0] && rows[0].texture, note: meta.from, lat: state.site.lat, lon: state.site.lon, elev: e ? e.z : null, id: "USER" });
+      soil.order = meta.order || "";
+      soil.notes = [...(rows.notes || []), ...soil.notes];
+      soil.layers.forEach(l => {
+        const r = rows.find(x => num(x.bot) === l.bot);
+        if (!r) return;
+        SURVEY_KEPT.forEach(k => { if (r[k] !== undefined) l[k] = r[k]; });
+        if (r.caco3 === null) l.caco3 = null; // the survey gives none, as distinct from 0
+      });
     } else {
       soil = M.surveySoil(state, v || null); // "" (the placeholder): the dominant component, if the survey has come in since
-      if (!soil) throw new Error(!state.soil ? "The soil survey is still loading: try again in a moment, or choose “My own soil profile…”." : "The survey has no soil profile here: choose “My own soil profile…”.");
+      if (!soil) throw new Error(surveyGap());
     }
     const mode = $("#dlLayers").value;
     if (mode !== "custom") return { ...soil, layering: mode };
@@ -387,7 +506,7 @@ WG.datasheet = (function () {
   async function chosenWeather(job, status) {
     const { src, site, elev, d0, d1 } = job;
     if (src !== "file") {
-      status(`Reading ${src === "gridmet" ? "gridMET" : "NASA POWER"} daily weather…`);
+      status(`Reading ${{ gridmet: "gridMET", prism: "PRISM", power: "NASA POWER" }[src]} daily weather…`);
       return Wd.dailyWeather(site.lat, site.lon, d0, d1, src, elev);
     }
     const u = job.file, ix = new Map(u.days.map((d, k) => [d, k])), w = { ...u, days: [] }, keys = ["prcp", "tmax", "tmin", "srad", "rh", "rhmax", "rhmin", "tdew", "vp", "wind10", "wind2", "et0"];
@@ -429,31 +548,59 @@ WG.datasheet = (function () {
     return n;
   }
 
+  /* ---------- the site's elevation ---------- */
+  // the page's lookup started before the sheet first opened for this location, and gives up after 15 s (USGS) and 10 s (Copernicus)
+  const ELEV_WAIT = 25000;
+  let sheetOpened = null, elevCell = null;
+  function noteOpened() { if (!sheetOpened || sheetOpened.tok !== state.token) sheetOpened = { tok: state.token, t: Date.now() }; }
+  /* the elevation for the files, { z (m, null if unknown), src, fallback }: the page's lookup, waited for while it may
+     still answer; if it gave none, NASA POWER's cell (read once for a location; within about 100 m at 8 Texas points
+     tried), else the survey's for its main soil (off by up to 560 m at the same points) */
+  async function siteElev(site, status, live) {
+    noteOpened();
+    if (!state.elev && Date.now() < sheetOpened.t + ELEV_WAIT) status("Waiting for this location's elevation…");
+    while (!state.elev && Date.now() < sheetOpened.t + ELEV_WAIT) { await new Promise(r => setTimeout(r, 200)); live(); }
+    if (state.elev) return { z: state.elev.z, src: state.elev.src };
+    if (elevCell && elevCell.tok === state.token) return elevCell.e;
+    status("The elevation lookup gave no answer: asking NASA POWER…");
+    try {
+      const d = Wd.today() - 30, w = await Wd.dailyWeather(site.lat, site.lon, d, d, "power", null);
+      if (w.elev > 0) { elevCell = { tok: state.token, e: { z: w.elev, src: "NASA POWER's 0.5° grid cell", fallback: true } }; return elevCell.e; }
+    } catch (e) { console.warn("elevation from NASA POWER", e); }
+    const s = state.soil, z = s && s.dominant ? num(s.dominant.elev_r) : null;
+    return z !== null ? { z, src: "the soil survey, for its main soil", fallback: true } : { z: null, fallback: true };
+  }
+
   /* the last weather and climate reads: Download after Preview reads nothing twice. Writers never change them. */
   let wxKept = null, climKept = null;
   async function keptWeather(job, status) {
-    const key = JSON.stringify([job.src, job.fill, job.file ? wxUnits() : null, job.site.lat, job.site.lon, job.elev, job.d0, job.d1]);
-    if (wxKept && wxKept.key === key && wxKept.file === (job.file ? userWxSrc : null)) return wxKept.wx;
+    const key = JSON.stringify([job.src, job.fill, job.file ? job.units : null, job.site.lat, job.site.lon, job.elev, job.d0, job.d1]);
+    if (wxKept && wxKept.key === key && wxKept.file === job.fileSrc) return wxKept.wx;
     const wx = await chosenWeather(job, status);
-    wxKept = wx.fillError ? null : { key, file: job.file ? userWxSrc : null, wx }; // a failed fill may work next time
+    wxKept = wx.fillError ? null : { key, file: job.fileSrc, wx }; // a failed fill may work next time
     return wx;
   }
 
   const STOPPED = new Error("stopped");
   const notWritten = (what, why, more) => `${what} could not be made: ${String(why).replace(/\.$/, "")}.\r\n${more ? `${more}\r\n` : ""}The other files in this zip are complete; README.txt lists them.\r\n`;
   // a Preview or a Download, with the sheet's choices at this moment
-  async function run(action) {
+  function run(action) {
     if (running) return;
-    const models = $$("input[name=dlModel]:checked").map(i => i.value), series = $$("input[name=dlSeries]:checked").map(i => i.value);
+    const models = $$("input[name=dlModel]:checked").map(i => i.value), series = $$("input[name=dlSeries]:checked").map(i => i.value).filter(k => seriesOn(k, tab));
     if (!models.length && !series.length) return toast("Tick at least one model or table.");
     const a = $("#dlFrom").value, b = $("#dlTo").value;
-    if (!a || !b || a > b) return toast("Choose a start date before the end date.");
+    if (tab !== "soil" && (!a || !b || a > b)) return toast("Choose a start date before the end date.");
+    return work(status => action(models, series, a, b, status));
+  }
+  // a job with the buttons off, its status shown again if the sheet is opened again meanwhile
+  async function work(job) {
+    if (running) return;
     running = { tok: state.token, text: "" };
     busy(true);
     const status = t => { running.text = t; $("#dlStatus").textContent = t; };
     status("Working…"); // not the last download's result
     let msg;
-    try { msg = await action(models, series, a, b, status); }
+    try { msg = await job(status); }
     catch (e) {
       if (e !== STOPPED) console.error(e);
       msg = e === STOPPED ? "Stopped: another location was chosen while the files were being made, so nothing was saved." : `Could not make the files: ${e.message || e}`;
@@ -463,22 +610,49 @@ WG.datasheet = (function () {
     $("#dlStatus").textContent = msg;
     if ($("#dataSheet").hidden) toast(msg, 6000);
   }
+  /* the soil for the files, or why there is none. A survey with no usable soil here leaves the weather and the tables,
+     written without it and saying why; a survey still loading and what the user typed (own layers, custom depths) stop
+     the job, to be put right. modelSoilWhy: the plain CSV and the soil table can list this soil, the models cannot use it. */
+  function soilForFiles(models, series) {
+    const gap = $("#dlSoil").value === "user" ? "" : surveyGap();
+    if (gap && surveyLoading()) throw new Error(gap);
+    if (gap) return { soil: null, soilWhy: gap, modelSoilWhy: "" };
+    const soil = chosenSoil();
+    if (!soil.layers.length) {
+      if (!soil.mukey) throw new Error(NO_LAYER);
+      return { soil: null, soilWhy: `The survey has no usable layers for ${soil.name}: choose another component, or “My own soil profile…”.`, modelSoilWhy: "" };
+    }
+    if (!models.some(m => m !== "csv")) return { soil, soilWhy: "", modelSoilWhy: "" };
+    try { usableRows(soil); return { soil, soilWhy: "", modelSoilWhy: "" }; }
+    catch (e) {
+      if (!soil.mukey) throw e;
+      return models.includes("csv") || series.includes("soil") ? { soil, soilWhy: "", modelSoilWhy: e.message } : { soil: null, soilWhy: e.message, modelSoilWhy: "" };
+    }
+  }
+  /* the wind series in use, read when the wind tables are made: its source and period */
+  function windSeries() {
+    const w = state.wind, raw = state.windRaw, per = (raw && raw.period) || (w && w.period) || {}, st = state.windStation && state.windStation.meta, ap = state.windAirport && state.windAirport.meta;
+    const model = (raw || w || {}).model === "ecmwf" ? "ECMWF" : "MERRA-2", named = s => `${s.id}${s.name ? ` (${s.name})` : ""}`, pending = state.windStationPending && state.windKey !== "cal";
+    const src = state.windKey === "cal" && st ? `${model} calibrated to ${st.tower ? "the mesonet tower" : "the airport"} ${named(st)}`
+      : state.windKey === "station" && ap ? `observations at the airport ${named(ap)}`
+        : `${model}, not calibrated${pending ? " (the calibration to a nearby station was still running: download again once the Wind tab shows it)" : ""}`;
+    return { src, pending, label: per.label || (w && w.start ? `${w.start}–${w.end}` : ""), from: per.from, to: per.to, thr: w && !w.error ? w.thr : null };
+  }
   /* everything the files need, up to packing them, for a Preview and a Download alike. It is all read before the first
-     await, so closing the sheet, opening it again or choosing another location cannot leak into it; another location
-     stops it */
+     await (only the elevation is waited for), so closing the sheet, opening it again or choosing another location cannot
+     leak into it; another location stops it */
   async function prepare(models, series, a, b, status) {
     const tok = state.token, live = () => { if (state.token !== tok) throw STOPPED; };
-    const site = { lat: state.site.lat, lon: state.site.lon, name: state.place || "WindGuard site" }, place = state.place, elev = state.elev ? state.elev.z : null;
-    const src = $("#dlWx").value, fill = src === "file" && $("#uFill").checked, windHeight = +$("#uWh").value || 2;
-    const needWx = models.length > 0 || series.includes("daily"), needSoil = models.length > 0 || series.includes("soil");
-    const soil = needSoil ? chosenSoil() : null;
-    if (soil && !soil.layers.length) throw new Error(soil.mukey ? `The survey has no usable layers for ${soil.name}: choose another component, or “My own soil profile…”.` : "Your profile has no complete layer: each needs a bottom depth, sand and clay.");
-    if (soil && models.some(m => m !== "csv")) usableRows(soil);
-    const file = needWx && src === "file" ? fileWeather(site, elev) : null;
+    const site = { lat: state.site.lat, lon: state.site.lon, name: state.place || "WindGuard site" }, place = state.place;
+    const src = $("#dlWx").value, fill = src === "file" && $("#uFill").checked, windHeight = +$("#uWh").value || 2, which = tab;
+    const needWx = which !== "soil" && (models.length > 0 || series.includes("daily")), needSoil = which !== "weather" && (models.length > 0 || series.includes("soil"));
+    const fileSrc = needWx && src === "file" ? userWxSrc : null, units = fileSrc ? wxUnits() : null;
+    const { soil, soilWhy, modelSoilWhy } = needSoil ? soilForFiles(models, series) : { soil: null, soilWhy: "", modelSoilWhy: "" };
+    const file = fileSrc || (needWx && src === "file") ? fileWeather(site, null) : null, away = file ? wxAway() : "";
     // dates outside the source's record are left out; none inside it is an error
-    let d0 = Wd.parseDay(a), d1 = Wd.parseDay(b), moved = null;
+    let d0 = a ? Wd.parseDay(a) : null, d1 = b ? Wd.parseDay(b) : null, moved = null;
     if (needWx) {
-      const r = wxRange(src, fill, file && { days: file.days, name: userWxSrc.name });
+      const r = wxRange(src, fill, file && { days: file.days, name: fileSrc.name });
       if (d1 < r.first || d0 > r.last) throw new Error(`These dates are outside ${r.what} (${span(r)}).`);
       if (d0 < r.first || d1 > r.last) {
         d0 = Math.max(d0, r.first); d1 = Math.min(d1, r.last);
@@ -487,14 +661,23 @@ WG.datasheet = (function () {
         keepForm();
       }
     }
+    // the form these files are made from, its dates as moved: a preview of it is not stale for the move
+    const key = formKey();
     const wind = windNow(), failed = [], noted = new Map();
     // the hourly series (hourly table, EPIC/APEX .WND) and its analysis (monthly and annual summaries), or why there is none
-    const ctx = { wx: null, soil, climWx: null, site: { ...site, elev }, wind: wind.raw ? { raw: wind.raw } : null, windWhy: wind.rawWhy, analysis: wind.analysis, analysisWhy: wind.why, d0, d1 };
+    const ctx = { wx: null, soil, soilWhy, climWx: null, site: { ...site, elev: null }, wind: wind.raw ? { raw: wind.raw } : null, windWhy: wind.rawWhy, analysis: wind.analysis, analysisWhy: wind.why, d0, d1 };
     // the wind tables come from the series in use now
-    const windTables = series.filter(k => ["hourly", "monthly", "annual"].includes(k)).map(k => tableFile(k, ctx, failed));
+    const windTables = series.filter(k => ["hourly", "monthly", "annual"].includes(k)).map(k => tableFile(k, ctx, failed)), windFrom = windSeries();
+    // the zip's name gives the dates of what is in it: the wind tables follow the wind period, not the form's dates
+    const stem = needWx ? `${Wd.isoDay(d0)}_${Wd.isoDay(d1)}` : windTables.length && windFrom.from ? `${windFrom.from}_${windFrom.to}` : needSoil ? "soil" : "wind";
 
-    const wx = needWx ? await keptWeather({ src, fill, file, name: userWxSrc && userWxSrc.name, site, elev, d0, d1 }, status) : null;
+    const elevAt = needWx ? await siteElev(site, status, live) : null, elev = elevAt ? elevAt.z : null;
     live();
+    if (file) file.elev = elev;
+    if (soil && elev !== null) soil.elev = elev;
+    const read = needWx ? await keptWeather({ src, fill, file, fileSrc, units, name: fileSrc && fileSrc.name, site, elev, d0, d1 }, status) : null;
+    live();
+    const wx = read && elev === null ? { ...read, elev: null } : read; // the sea level gridMET's air pressure then took is not this place's elevation
     // days without Tmax and Tmin at either end: the models that cannot read gaps leave them out (their READMEs give the dates)
     let edge = null;
     if (wx) {
@@ -512,16 +695,18 @@ WG.datasheet = (function () {
     const U = WG.writerUtil, by = list => (wx ? models.filter(m => list.includes(m)).map(m => MODEL_NAME[m]) : []);
     const tavBy = by(["dssat", "apsim"]), genBy = by(["epic", "apex", "swatplus"]);
     const tav = tavBy.length > 0 && !U.tavAmp(wx, false), gaps = genBy.length ? U.statGaps(wx) : [];
+    // CENTURY's site file holds climate lines, from 10 years a month: the chosen dates if they have them
+    const centBy = soil && !soilWhy && !modelSoilWhy && models.includes("century") && U.centuryNeedsClimate(wx) ? [MODEL_NAME.century] : [];
     let climWx = null, climError = null, clim = null;
-    if (tav || gaps.length) {
-      const cs = src === "power" ? "power" : "gridmet", per = new Array(12).fill(0);
-      wx.days.forEach(d => per[new Date(d * 864e5).getUTCMonth()]++);
-      const short = per.some(x => x < 20), genWhat = gaps.length ? `the weather-generator statistics${short ? "" : ` of ${and(gaps)}`}` : ""; // short: every group lacks those months
-      clim = { src: cs === "power" ? "NASA POWER" : "gridMET", tav, gaps, tavBy, genBy, genWhat, what: and([tav && "TAV and AMP", genWhat].filter(Boolean)),
-        why: short ? "the chosen dates do not cover every month" : `the weather has fewer than 20 days of ${and(gaps.length ? gaps : ["Tmax and Tmin"])} in some months` };
+    if (tav || gaps.length || centBy.length) {
+      const cs = src === "power" || src === "prism" ? src : "gridmet", per = new Array(12).fill(0);
+      if (wx) wx.days.forEach(d => per[new Date(d * 864e5).getUTCMonth()]++);
+      const short = !!wx && per.some(x => x < 20), genWhat = gaps.length ? `the weather-generator statistics${short ? "" : ` of ${and(gaps)}`}` : ""; // short: every group lacks those months
+      clim = { src: { power: "NASA POWER", prism: "PRISM", gridmet: "gridMET" }[cs], tav, gaps, tavBy, genBy, centBy, genWhat, what: and([tav && "TAV and AMP", genWhat, centBy.length && "CENTURY's climate lines"].filter(Boolean)),
+        why: !wx ? "this download has no weather to work them out from" : short ? "the chosen dates do not cover every month" : tav || gaps.length ? `the weather has fewer than 20 days of ${and(gaps.length ? gaps : ["Tmax and Tmin"])} in some months` : "the chosen dates have fewer than 10 years in some month" };
       status(`${cap(clim.why)}: reading 10 complete years of ${clim.src} for ${clim.what}…`);
       try {
-        const y1 = new Date((cs === "gridmet" ? await Wd.gridmetLast() : Wd.today() - 10) * 864e5).getUTCFullYear() - 1, some = cs === "gridmet" && !gaps.length;
+        const y1 = new Date((cs === "power" ? Wd.today() - 10 : await Wd.gridmetLast()) * 864e5).getUTCFullYear() - 1, some = cs !== "power" && !gaps.length && !centBy.length; // TAV and AMP need temperatures only
         clim.years = `${y1 - 9}–${y1}`;
         const key = JSON.stringify([cs, some, site.lat, site.lon, elev, y1]);
         climWx = climKept && climKept.key === key ? climKept.wx : await Wd.dailyWeather(site.lat, site.lon, Wd.epochDay(y1 - 9, 0, 1), Wd.epochDay(y1, 11, 31), cs, elev, some ? ["tmmx", "tmmn"] : null);
@@ -529,14 +714,16 @@ WG.datasheet = (function () {
       } catch (e) { console.warn("climate statistics", e); climError = e.message || String(e); }
       live();
     }
-    Object.assign(ctx, { wx, climWx, site: { ...site, elev: elev ?? (wx ? wx.elev : null) } });
+    Object.assign(ctx, { wx, climWx, site: { ...site, elev } });
     const files = [];
     for (const m of models) {
       status(`Writing ${MODEL_NAME[m]} files…`);
       try {
         const w = M.writers[m];
         if (!w) throw new Error("its writer is not available yet");
-        const out = await w(ctx);
+        const noSoil = soilWhy || (m === "csv" ? "" : modelSoilWhy); // the plain CSV lists a soil the models cannot use
+        const out = await w(noSoil ? { ...ctx, soil: null } : ctx), own = out.find(f => f.name === "README.txt");
+        if (noSoil && own) own.text += `\r\nNo soil file: ${noSoil}\r\n`;
         out.forEach(f => files.push({ ...f, name: `${m}/${f.name}` }));
         (Array.isArray(out.notes) ? out.notes : []).forEach(n => noted.set(n, [...(noted.get(n) || []), MODEL_NAME[m]]));
       } catch (e) {
@@ -545,38 +732,50 @@ WG.datasheet = (function () {
         const why = String(e.message || e).replace(new RegExp(`^${MODEL_NAME[m].split(" ")[0].replace(/\+/g, "\\+")}: `), "");
         failed.push({ what: MODEL_NAME[m], why });
         // a generator whose missing statistics the failed climate read was to supply: a later download may get them
-        const more = climError && clim.gaps.length && clim.genBy.includes(MODEL_NAME[m]) ? `Reading 10 complete years of ${clim.src} for ${clim.what} failed (${climError}); downloading again may get them.` : "";
+        const more = climError && ((clim.gaps.length && clim.genBy.includes(MODEL_NAME[m])) || clim.centBy.includes(MODEL_NAME[m])) ? `Reading 10 complete years of ${clim.src} for ${clim.what} failed (${climError}); downloading again may get them.` : "";
         files.push({ name: `${m}/NOT_WRITTEN.txt`, text: notWritten(`The ${MODEL_NAME[m]} files`, why, more) });
       }
     }
     files.push(...windTables, ...series.filter(k => k === "daily" || k === "soil").map(k => tableFile(k, ctx, failed)));
     // the same reason, or note, once for all it concerns
-    const why = [...new Set(failed.map(f => f.why))].map(r => `${and(failed.filter(f => f.why === r).map(f => f.what))}: ${r.replace(/\.$/, "")}`).join("; ");
+    const whyOf = list => [...new Set(list.map(f => f.why))].map(r => `${and(list.filter(f => f.why === r).map(f => f.what))}: ${r.replace(/\.$/, "")}`).join("; "), why = whyOf(failed);
     const notes = [...noted].map(([t, ms]) => `${and(ms)}: ${t}`), n = files.filter(f => !/NOT_WRITTEN/.test(f.name)).length;
     // nothing to save: a failed climate read is then the reason a second try may work
     if (!n) throw new Error(`${why || "there was nothing to write"}${climError ? `. Reading 10 complete years of ${clim.src} for ${clim.what} failed (${climError}); downloading again may get them` : ""}`);
-    files.push({ name: "README.txt", text: readme(ctx, { models, series, moved, edge, clim, climError, notes, failed, windHeight, file }) });
-    const warn = [moved && `${moved}.`, edge && gapless.length && `${edge}: the ${and(gapless)} files leave out the other days.`,
+    files.push({ name: "README.txt", text: readme(ctx, { which, models, series, moved, edge, clim, climError, notes, failed, windHeight, file, away, elevAt, windFrom }) });
+    // the status gives the missing soil once, with the soil table when it went for the same reason
+    const noSoilIn = models.filter(m => soilWhy || (m !== "csv" && modelSoilWhy)).map(m => MODEL_NAME[m]), tableGone = failed.filter(f => noSoilIn.length && f.why === soilWhy), otherFails = failed.filter(f => !tableGone.includes(f));
+    const warn = [moved && `${moved}.`, away, elevAt && elevAt.fallback && (elev === null ? "No elevation could be read for this location: see the README." : `The elevation lookup gave no answer, so the files use ${UN.fmt("elev", elev)} from ${elevAt.src}.`),
+      noSoilIn.length && `No soil file for ${and([...noSoilIn, ...tableGone.map(f => f.what)])}: ${soilWhy || modelSoilWhy}`, windTables.length && windFrom.pending && "The wind tables hold the series not yet calibrated, as the calibration was still running.", edge && gapless.length && `${edge}: the ${and(gapless)} files leave out the other days.`,
       climWx && `${cap(clim.what)} come from 10 complete years of ${clim.src} (${clim.years}), because ${clim.why}.`,
       climError && `${cap(clim.why)}, and reading 10 complete years of ${clim.src} for ${clim.what} failed (${climError}).`,
-      wx && wx.fillError && `Gaps could not be filled from gridMET (${wx.fillError}).`, failed.length && `Not written: ${why}.`,
+      wx && wx.fillError && `Gaps could not be filled from gridMET (${wx.fillError}).`, wx && wx.source === "prism" && wx.rest !== "gridMET" && `PRISM has only rain and temperature: ${wx.rest ? `solar radiation, humidity and wind are from ${wx.rest}, as ${wx.restWhy}` : `there is no solar radiation, humidity or wind, as ${wx.restWhy}`}.`, otherFails.length && `Not written: ${whyOf(otherFails)}.`,
       notes.length && `${notes.length} note${notes.length > 1 ? "s" : ""} from the model files.`].filter(Boolean);
-    return { tok, live, ctx, files, n, models, series, notes, failed, site, place, d0, d1, warn, names: MODEL_NAME };
+    return { tok, live, key, ctx, files, n, models, series, notes, failed, site, place, d0, d1, stem, warn, names: MODEL_NAME };
   }
-  async function build(models, series, a, b, status) {
-    const p = await prepare(models, series, a, b, status);
+  // the zip's files, README.txt and any NOT_WRITTEN.txt among them, as the preview counts them
+  const fileCount = p => `${p.files.length} file${p.files.length === 1 ? "" : "s"}`;
+  async function saveZip(p, status) {
     status("Packing…");
     const blob = await M.zip(p.files);
     p.live();
-    X.save(blob, `${D.baseName(`${Wd.isoDay(p.d0)}_${Wd.isoDay(p.d1)}`, p.site, p.place)}.zip`, "application/zip");
-    return `Done: ${p.n} file${p.n === 1 ? "" : "s"}.${p.warn.length ? ` ${p.warn.join(" ")} See README.txt.` : ""}`;
+    X.save(blob, `${D.baseName(p.stem, p.site, p.place)}.zip`, "application/zip");
+    return `Done: ${fileCount(p)}.${p.warn.length ? ` ${p.warn.join(" ")} See README.txt.` : ""}`;
+  }
+  async function build(models, series, a, b, status) {
+    return saveZip(await prepare(models, series, a, b, status), status);
   }
   async function preview(models, series, a, b, status) {
-    const key = formKey(), p = await prepare(models, series, a, b, status);
+    const p = await prepare(models, series, a, b, status);
     p.live();
-    previewed = { tok: p.tok, key, job: p };
+    previewed = { tok: p.tok, key: p.key, job: p };
     showPreview(true);
-    return `Nothing is saved yet: this is what the ${p.files.length} file${p.files.length === 1 ? "" : "s"} will hold.${p.warn.length ? ` ${p.warn.join(" ")}` : ""}`;
+    return `Nothing is saved yet: this is what the ${fileCount(p)} will hold.${p.warn.length ? ` ${p.warn.join(" ")}` : ""}`;
+  }
+  /* the files the preview drew, whatever the form says now: only for the location they were made for */
+  function saveShown(status) {
+    if (!previewed || previewed.tok !== state.token) throw new Error("the preview is not for this location: preview again");
+    return saveZip(previewed.job, status);
   }
   const and = a => (a.length > 1 ? `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}` : a[0]);
   const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
@@ -610,24 +809,31 @@ WG.datasheet = (function () {
         "Relative humidity (%)", `Dew point (${UN.sym("temp")})`, `Wind at 10 m (${ws})`, `Grass ET0 (${UN.sym("precip")})`],
         w.days.map((d, i) => [Wd.isoDay(d), p(w.prcp[i]), t(w.tmax[i]), t(w.tmin[i]), sr(w.srad[i]), rd(w.rh[i], 1), t(w.tdew[i]), cw(w.wind10[i]), p(w.et0[i])])) };
     }
-    // every value rounded, and blank when missing (null, NaN): Ksat mm/h to the table's unit only when present, as
-    // null / 3.6 would be 0, impermeable
-    const s = ctx.soil, dz = v => rd(UN.conv("depth", v), 1), ks = v => (Number.isFinite(v) ? rd(UN.conv("ksat", v / 3.6), 3) : null);
+    if (!ctx.soil) throw new Error(ctx.soilWhy);
+    // every value rounded, and blank when missing (null, NaN): depths as in the depth box, so they read back to the same
+    // 0.1 cm; Ksat mm/h to the table's unit only when present, as null / 3.6 would be 0, impermeable
+    const s = ctx.soil, dz = v => rd(UN.conv("depth", v), depthDp()), ks = v => (Number.isFinite(v) ? rd(UN.conv("ksat", v / 3.6), 3) : null);
     return { name, text: X.csv([`Top (${UN.sym("depth")})`, `Bottom (${UN.sym("depth")})`, "Horizon", "Sand (%)", "Silt (%)", "Clay (%)", "Organic matter (%)", "Organic carbon (%)",
       "Bulk density (g/cm3)", "Wilting point (cm3/cm3)", "Field capacity (cm3/cm3)", "Saturation (cm3/cm3)", `Ksat (${UN.sym("ksat")})`, "pH", "CEC (cmol/kg)", "CaCO3 (%)", "Coarse fragments (% volume)", "EC (dS/m)"],
       s.layers.map(l => [dz(l.top), dz(l.bot), l.hz, rd(l.sand, 2), rd(l.silt, 2), rd(l.clay, 2), rd(l.om, 2), rd(l.oc, 2), rd(l.bd, 2), rd(l.ll, 3), rd(l.dul, 3), rd(l.sat, 3), ks(l.ksat),
         rd(l.ph, 2), rd(l.cec, 2), rd(l.caco3, 2), rd(l.cfVol, 1), rd(l.ec, 2)])) };
   }
 
+  /* the elevation the files use and where it came from */
+  function elevText(e) {
+    if (e.z === null) return "Elevation: unknown, as the elevation lookup, the soil survey and NASA POWER gave none. gridMET's humidity and dew point and ET0 worked out from your file take air pressure at sea level; DSSAT's .WTH writes -99 and the SWAT+, EPIC and APEX files write 0, so set yours before running them.";
+    return `Elevation: ${+e.z.toFixed(1)} m${e.fallback ? ` from ${e.src}, as the elevation lookup gave no answer` : e.src ? ` (${e.src.replace(/ \d+ m.*$/, "")})` : ""}.`;
+  }
   /* how the files' wind was made, by source */
   function windText(w, o) {
     const has = a => Array.isArray(a) && a.some(v => v !== null && v !== undefined);
     const gm = w.filled && w.filled.wind10 ? ` ${w.filled.wind10} days come from gridMET's 10 m wind (2 m = 0.748 × 10 m).` : "";
-    const how = w.source === "gridmet" ? "gridMET daily mean wind at 10 m; the 2 m wind is 0.748 × the 10 m value (FAO-56 Eq. 47)."
-      : w.source === "power" ? "NASA POWER daily mean wind at 10 m (WS10M) and at 2 m (WS2M), each used as it is."
+    const how = w.source === "gridmet" || (w.source === "prism" && w.rest === "gridMET") ? "gridMET daily mean wind at 10 m; the 2 m wind is 0.748 × the 10 m value (FAO-56 Eq. 47)."
+      : w.source === "power" || (w.source === "prism" && w.rest) ? "NASA POWER daily mean wind at 10 m (WS10M) and at 2 m (WS2M), each used as it is."
+        : w.source === "prism" ? "none, as neither gridMET nor NASA POWER answered."
         : has(o.file && o.file.wind10) ? `your file's wind, measured at ${o.file.windHeight ? o.file.windHeight.z : o.windHeight} m and moved to 10 m and 2 m with the log law (roughness 0.03 m).${gm}`
           : `your file has none.${gm || " The model files leave it out or mark it missing."}`;
-    return `Wind: ${how} Each model file states its height.`;
+    return `Daily wind in the weather files: ${how} Each model file states its height.`;
   }
   /* the soil the model files start from: its horizons (or your layers, or the custom layers) with water retention and
      bulk density. The models split or merge them, so each model folder's README gives the layers its file has. */
@@ -646,7 +852,7 @@ WG.datasheet = (function () {
     L.push(`  The model files start from ${from}, ${c(use[0].top)} to ${c(end)} cm.`
       + (rl && rl.cut !== null ? ` The profile ends at ${c(rl.cut)} cm (bedrock or a cemented layer).`
         : rest.length ? ` Below ${c(end)} cm ${s.mukey ? "the survey gives no water retention or bulk density (bedrock or a cemented layer)" : "the layers have no water retention or bulk density"}, so the profile ends there.` : "")
-      + (rl && rl.extendedBelow !== null ? ` Below ${c(rl.extendedBelow)} cm the survey has no horizons, so the deepest one is repeated.` : "")
+      + (rl && rl.extendedBelow !== null ? ` Below ${c(rl.extendedBelow)} cm ${s.mukey ? "the survey has no horizons" : "your profile has no layers"}, so the deepest one is repeated.` : "")
       + (s.layering === "model" ? " Each model splits or merges them its own way."
         : n > 5 ? ` The models that take fewer layers (AquaCrop at most 5${n > 10 ? ", APEX 10" : ""}${n > 15 ? ", EPIC 15" : ""}${n > 20 ? ", DSSAT 20" : ""}) merge the thinnest neighbours.` : "")
       + " Each model folder's README gives the layers that model's file has.");
@@ -663,12 +869,25 @@ WG.datasheet = (function () {
       none && `none on ${days(none)} without Tmax and Tmin`].filter(Boolean))}.`
       + (w.filled ? " gridMET's ET0 is not copied in, as it would not match your weather." : "");
   }
+  /* the source of the 10 years read for the climate, named as a Weather line names it, for a README with no Weather line
+     from that source: PRISM's terms ask for its name, address and the date read */
+  function climCredit(cw) {
+    const cell = `cell ${cw.lat.toFixed(4)}, ${cw.lon.toFixed(4)}`;
+    if (cw.source === "gridmet") return `Source: gridMET 4 km daily (University of Idaho; Abatzoglou 2013), ${cell}.`;
+    if (cw.source === "power") return "Source: NASA POWER daily (MERRA-2 based, 0.5°).";
+    // a read of temperatures only (TAV and AMP) asks for no other variable
+    const rest = cw.rest ? `; solar radiation, humidity and wind from ${cw.rest}` : cw.restWhy ? `; no solar radiation, humidity or wind, as ${cw.restWhy}` : "";
+    return `Source: rain, Tmax and Tmin from PRISM 4 km (PRISM Group, Oregon State University, https://prism.oregonstate.edu, accessed ${new Date().toISOString().slice(0, 10)}), read through ACIS (NOAA Regional Climate Centers), ${cell}${rest}.`;
+  }
   function readme(ctx, o) {
     const w = ctx.wx, s = ctx.soil, c = o.clim;
-    const L = [`WindGuard TX data for ${ctx.site.name} (${ctx.site.lat.toFixed(5)}, ${ctx.site.lon.toFixed(5)})`, `Made ${new Date().toISOString().slice(0, 10)} with ${location.origin}${location.pathname}`, ""];
+    const L = [`WindGuard TX data for ${ctx.site.name} (${ctx.site.lat.toFixed(5)}, ${ctx.site.lon.toFixed(5)})`, `Made ${new Date().toISOString().slice(0, 10)} with ${location.origin}${location.pathname}`,
+      ...(o.which === "both" ? [] : [`This download holds the ${o.which} files only: the other tab of the sheet makes the ${o.which === "soil" ? "weather" : "soil"} files.`]), ""];
     if (w) {
-      L.push(`Weather: ${w.source === "gridmet" ? "gridMET 4 km daily (University of Idaho; Abatzoglou 2013), cell " + w.lat.toFixed(4) + ", " + w.lon.toFixed(4) : w.source === "power" ? "NASA POWER daily (MERRA-2 based, 0.5°)" : w.source}`);
+      L.push(`Weather: ${w.source === "gridmet" ? "gridMET 4 km daily (University of Idaho; Abatzoglou 2013), cell " + w.lat.toFixed(4) + ", " + w.lon.toFixed(4) : w.source === "power" ? "NASA POWER daily (MERRA-2 based, 0.5°)" : w.source === "prism" ? `PRISM 4 km daily, cell ${w.lat.toFixed(4)}, ${w.lon.toFixed(4)}. ${Wd.prismNote(w.rest)}` : w.source}`);
       if (o.file) L.push(...readLines(o.file));
+      if (o.away) L.push(o.away);
+      L.push(elevText(o.elevAt));
       L.push(`Dates: ${Wd.isoDay(ctx.d0)} to ${Wd.isoDay(ctx.d1)} (${w.days.length} days). DSSAT, APSIM and AquaCrop cannot read gaps: each folder's README says how their files deal with them. The other files use the model's missing-value code.`);
       if (o.moved) L.push(`${o.moved}.`);
       if (o.edge) L.push(`${o.edge}. DSSAT, APSIM and AquaCrop leave out the days without them (their READMEs give the dates).`);
@@ -678,24 +897,31 @@ WG.datasheet = (function () {
       L.push(windText(w, o), "");
     }
     // why 10 complete years were read, for which models' statistics, and what they did when the read failed
-    if (c && ctx.climWx) L.push(`Climate statistics: ${and([c.tav && `TAV and AMP (${and(c.tavBy)})`, c.gaps.length && `${c.genWhat} (${and(c.genBy)})`].filter(Boolean))} come from 10 complete years of ${c.src}, `
-      + `${Wd.isoDay(ctx.climWx.days[0])} to ${Wd.isoDay(ctx.climWx.days[ctx.climWx.days.length - 1])}, because ${c.why}. Each model folder's README says which of its statistics use them.`, "");
+    if (c && ctx.climWx) L.push(`Climate statistics: ${and([c.tav && `TAV and AMP (${and(c.tavBy)})`, c.gaps.length && `${c.genWhat} (${and(c.genBy)})`, c.centBy.length && "the climate lines of CENTURY's site file"].filter(Boolean))} come from 10 complete years of ${c.src}, `
+      + `${Wd.isoDay(ctx.climWx.days[0])} to ${Wd.isoDay(ctx.climWx.days[ctx.climWx.days.length - 1])}, because ${c.why}. Each model folder's README says which of its statistics use them.${w && w.source === ctx.climWx.source ? "" : ` ${climCredit(ctx.climWx)}`}`, "");
     else if (c && o.climError) L.push(`Climate statistics: ${c.why}, and reading 10 complete years of ${c.src} for ${c.what} failed (${o.climError}).`
       + (c.tav ? ` ${and(c.tavBy)} ${c.tavBy.length > 1 ? "take" : "takes"} TAV and AMP from the months the dates have instead, marked approximate.` : "")
-      + (c.gaps.length ? ` For ${and(c.genBy)}, the folder's README says where the generator statistics came from, or a NOT_WRITTEN.txt in its place says why the files could not be made.` : ""), "");
-    if (s) L.push(...soilText(s, o), "");
-    const wnd = o.models.filter(m => m === "epic" || m === "apex").map(m => MODEL_NAME[m]).filter(n => !o.failed.some(f => f.what === n));
+      + (c.gaps.length ? ` For ${and(c.genBy)}, the folder's README says where the generator statistics came from, or a NOT_WRITTEN.txt in its place says why the files could not be made.` : "")
+      + (c.centBy.length ? " CENTURY's README says where its site file's climate lines came from, or why that file could not be made." : ""), "");
+    if (s) L.push(...soilText(s, o), ...(s.notes || []).map(n => `  ${n}`), "");
+    else if (ctx.soilWhy) L.push(`Soil: none in these files. ${ctx.soilWhy}`, "");
+    const made = what => !o.failed.some(f => f.what === what);
+    const wnd = w ? o.models.filter(m => m === "epic" || m === "apex").map(m => MODEL_NAME[m]).filter(made) : []; // the .WND comes with the weather only
+    // the wind tables and .WND follow the wind period, whatever the dates of the weather
+    const summaries = o.series.filter(k => (k === "monthly" || k === "annual") && made(SERIES_NAME[k]));
+    const held = [...o.series.filter(k => ["hourly", "monthly", "annual"].includes(k) && made(SERIES_NAME[k])).map(k => `tables/${TABLE[k]}.csv`), ...(ctx.wind ? wnd.map(n => `the ${n} .WND`) : [])];
+    if (held.length) L.push(`Wind series in ${and(held)}: ${o.windFrom.src}, ${o.windFrom.label} (the series in use on the Wind tab${w ? ", not the dates above" : ""}).`
+      + (summaries.length ? ` Erosive threshold ${fmt(UN.conv("wind", o.windFrom.thr), 1)} ${UN.sym("wind")} at 10 m.${summaries.includes("monthly") ? " The monthly summary averages that period by calendar month." : ""}` : ""), "");
     if (!ctx.wind && wnd.length) L.push(`${and(wnd)} wind file (.WND): ${ctx.windWhy}, so it uses daily mean wind, with directions spread evenly (the folder's README says from which days).`, "");
     if (o.notes.length) L.push("Notes from the model files:", ...o.notes.map(n => `  ${n}`), "");
     if (o.failed.length) L.push("Not written (a NOT_WRITTEN.txt in its place says why):", ...o.failed.map(f => `  ${f.what}: ${f.why}`), "");
-    const made = what => !o.failed.some(f => f.what === what);
     L.push(`Models: ${o.models.filter(m => made(MODEL_NAME[m])).map(m => `${MODEL_NAME[m]} (${m}/)`).join(", ") || "none"}. Tables: ${o.series.filter(k => made(SERIES_NAME[k])).map(k => `tables/${TABLE[k]}.csv`).join(", ") || "none"}.`,
       "See the README inside each model folder, where present, for how to load the files.");
     return L.join("\r\n") + "\r\n";
   }
 
   // the form is saved as it is filled in, in the units of that moment, so a later change of units converts it correctly
-  ["input", "change"].forEach(t => $("#dataBody").addEventListener(t, () => { keepForm(); checkStale(); }));
+  ["input", "change"].forEach(t => $("#dataBody").addEventListener(t, () => { keepForm(); checkStale(); climNote(); })); // climNote: the CENTURY box
   $("#dataBtn").addEventListener("click", () => {
     if (!state.site) return toast("Pick a location on the map first.");
     render();

@@ -21,9 +21,11 @@ WG.grid = (function () {
     ["rh", "Mean relative humidity", "RH", null], ["wind10", "Mean wind at 10 m", "WIND", "wind"], ["et0", "Grass ET0", "ET0", "precip", true]];
   /* the weather sources' grids, for telling which of their cells a grid cell falls in */
   const WX_GRID = { gridmet: { name: "gridMET", res: "4 km", dLat: 1 / 24, dLon: 1 / 24, lat0: 49.4, lon0: -124.7666666333 },
+    prism: { name: "PRISM", res: "4 km", dLat: 1 / 24, dLon: 1 / 24, lat0: 49.9166666667, lon0: -125 }, // its own grid; solar, humidity and wind from gridMET's cell there
     power: { name: "NASA POWER", res: "0.5°", dLat: 0.5, dLon: 0.625, lat0: 0, lon0: 0 } };
 
-  let area = null, job = null, busy = false, own = null;
+  let area = null, job = null, busy = false, own = null, gen = 0; // gen counts changes, so a build knows its choices are still the sheet's
+  let want = null, auto = null; // the files ticked, kept while a choice rules one out so they come back; the file a change of shape ticked
   const soilKept = new Map(), wxKept = new Map();
   const breathe = () => new Promise(r => setTimeout(r));
   const short = (s, n) => String(s).replace(/[^\w]+/g, "_").slice(0, n);
@@ -31,7 +33,8 @@ WG.grid = (function () {
   /* ---------- the sheet ---------- */
   function open(a) {
     if (!a || !a.result) return toast("Draw or upload a boundary in the area tool first, and wait for its analysis.");
-    if (!area || area.polys !== a.polys) { job = null; own = null; }
+    if (!area || area.polys !== a.polys) own = null;
+    job = null; gen++; want = auto = null; // the form starts afresh, so no earlier or running build matches it
     area = a;
     render();
     D.open("gridSheet");
@@ -80,7 +83,7 @@ WG.grid = (function () {
         <div class="pv-vars" id="gFiles"></div>
         <p class="fine">A GeoTIFF holds square cells only. Some GIS software ignores a raster's turn, so a turned grid also comes well as polygons; hexagons can only be polygons.</p>
       </section>
-      <div class="area-actions"><button class="btn" id="gBuild">Build and preview</button><button class="btn primary" id="gSave" disabled>Download</button><span class="fine dl-status" id="gStatus"></span></div>
+      <div class="area-actions"><button class="btn" id="gBuild" ${busy ? "disabled" : ""}>Build and preview</button><button class="btn primary" id="gSave" disabled>Download</button><span class="fine dl-status" id="gStatus"></span></div>
       <section class="data-sec" id="gPvSec" hidden><h4>Preview</h4>
         <div class="pv-tools"><label class="pv-lab">Show <select id="gBand"></select></label></div>
         <canvas id="gCanvas" class="grid-canvas"></canvas><div id="gLegend" class="grid-legend"></div>
@@ -91,7 +94,11 @@ WG.grid = (function () {
   }
   function wire() {
     const body = $("#gridBody");
-    body.onchange = body.oninput = e => { if (["gBand", "gOwnFile"].includes(e.target.id)) return; stale(); estimate(); };
+    body.onchange = body.oninput = e => {
+      if (["gBand", "gOwnFile"].includes(e.target.id)) return;
+      if (e.target.name === "gFile") { if (e.target.checked) want.add(e.target.value); else want.delete(e.target.value); auto = null; }
+      stale(); estimate();
+    };
     body.onclick = e => {
       const q = e.target.closest("[data-quick]");
       if (q) { const [v, u] = q.dataset.quick.split(","); $("#gSize").value = v; $("#gUnit").value = u; stale(); estimate(); }
@@ -110,9 +117,16 @@ WG.grid = (function () {
     $("#gOwnBox").hidden = !mine;
     $("#gLineBox").hidden = mine;
     $("#gSize").disabled = $("#gUnit").disabled = mine;
-    if (mine) $("#gRule").value = $("#gRule").value;
+    // your own cells are always weighed: the sheet shows it, and the choice made before comes back after
+    const rule = $("#gRule");
+    if (mine && !rule.disabled) { rule.dataset.was = rule.value; rule.value = "area"; } else if (!mine && rule.disabled) rule.value = rule.dataset.was || "centre";
+    rule.disabled = mine;
+    // a GeoTIFF holds square cells only: with no other file ticked, other shapes get the shapefile, dropped again on square cells unless you ticked a file since
+    const sq = v === "square" || v === "turned";
+    if (want && !sq && ![...want].some(k => k !== "tif")) { want.add("shp"); auto = "shp"; } else if (want && sq && auto) { want.delete(auto); auto = null; }
   }
   function stale() {
+    gen++;
     if (!job) return;
     job = null;
     $("#gSave").disabled = true;
@@ -136,11 +150,11 @@ WG.grid = (function () {
   }
   /* the projection, and the lattice and its window, of the choices made */
   function setup(o) {
-    const bb = area.bb, cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2, P = o.crs === "albers" ? G.ALBERS : G.utm(G.zoneOf(cx));
+    const bb = area.bb, cx = (bb[0] + bb[2]) / 2, P = o.crs === "albers" ? G.ALBERS : G.utm(G.zoneOf(cx));
     const rings = area.polys.map(poly => poly.map(r => r.map(([x, y]) => P.fwd(x, y))));
     if (o.shape === "own") return { P, rings };
-    let ox = 0, oy = 0;
-    if (o.line) { ox = o.ox; oy = o.oy; } else if (o.angle) { const [E, N] = P.fwd(cx, cy); ox = Math.round(E / o.size) * o.size; oy = Math.round(N / o.size) * o.size; } // turned about a point near the area
+    // from 0, 0 or the corner given, turned or not, so grids of one size and angle line up
+    const ox = o.line ? o.ox : 0, oy = o.line ? o.oy : 0;
     const L = G.lattice({ kind: o.shape.startsWith("hex") ? "hex" : "square", size: o.size, angle: o.angle, ox, oy, flat: o.shape === "hexflat" });
     return { P, rings, L, W: G.windowOf(L, rings.flat()) };
   }
@@ -158,21 +172,40 @@ WG.grid = (function () {
       if (!(o.size >= 0.2)) { box.textContent = "The smallest cell is 20 cm."; return buttons(0, o, null); }
       S = setup(o);
       cells = areaM2() / S.L.area;
-      const need = Math.sqrt(areaM2() / MAX.window) * 1.2;
       say = `About ${wordy(cells)} cells of ${fmt(S.L.area, S.L.area < 1 ? 2 : 0)} m².`;
-      if (S.W.count > MAX.window) say += ` That is more than a browser can hold (${wordy(MAX.window)}): for this area use cells of ${need < 1 ? `${Math.ceil(need * 100)} cm` : `${Math.ceil(need)} m`} or more, or a smaller area.`;
+      // the size to suggest: the smallest whose lattice box (larger than the area when turned) a browser can hold and whose cells some file can take
+      const rings = S.rings.flat(), most = (n, W) => Math.max(W.count / MAX.window, Math.min(n / MAX.csv, S.L.hex ? Infinity : (n * nCols(o)) / MAX.values));
+      const over = s => { const L2 = G.lattice({ ...S.L, size: s }); return most(areaM2() / L2.area, G.windowOf(L2, rings)) > 1; };
+      if (most(cells, S.W) > 1) {
+        // both shrink as 1/size²; then up in whole cm below 10 m, whole m above, past the edges of the box
+        const up = v => (v < 10 ? Math.ceil(v * 100 - 1e-6) / 100 : Math.ceil(v - 1e-9));
+        let need = up(o.size * Math.sqrt(most(cells, S.W)));
+        for (let t = 0; t < 50 && over(need); t++) need = up(need + (need < 10 ? 0.01 : 1));
+        const use = `for this area use cells of ${need < 1 ? `${Math.round(need * 100)} cm` : `${+need.toFixed(2)} m`} or more, or a smaller area.`;
+        say += S.W.count > MAX.window ? ` That is more than a browser can hold (${wordy(MAX.window)}): ${use}` : ` No file holds that many (a CSV ${wordy(MAX.csv)} rows${S.L.hex ? "" : `, a GeoTIFF ${wordy(MAX.values)} values`}): ${use}`;
+      }
       if (o.rule === "area" && cells > MAX.sampled) say += ` Weighing what covers each cell works up to ${wordy(MAX.sampled)} cells; use what lies at the centre, or larger cells.`;
     }
-    box.textContent = say;
+    if (o.soil.length && !(o.depths && o.depths.length)) say += o.depths ? " Give the bottom of each layer for the soil columns." : " Layer bottoms must be positive numbers separated by commas.";
+    if (nCols(o) > MAX.fields) say += ` A shapefile holds ${MAX.fields} columns at most, and these choices make ${nCols(o)}.`;
     buttons(cells, o, S);
+    // with no file possible the advice above says why; otherwise say now what Build would refuse
+    if (!ticks("gFile").length && $$("input[name=gFile]:not(:disabled)").length) say += ` ${noFile()}`;
+    box.textContent = say;
   }
-  /* the file choices these cells allow; a tick survives while its file stays possible */
+  /* the file choices these cells allow: a file you ticked is ticked while it is possible, and again when a change makes it possible again */
   function buttons(cells, o, S) {
-    const was = new Set(ticks("gFile")), first = !$("#gFiles input"), hex = o.shape.startsWith("hex"), mine = o.shape === "own";
+    const hex = o.shape.startsWith("hex"), mine = o.shape === "own";
+    if (!want) want = new Set([hex || mine ? "shp" : "tif"]);
     const list = [["tif", `GeoTIFF, one band per column${hex || mine ? " (square cells only)" : ""}`, !hex && !mine && (S ? S.W.count <= MAX.window && cells * nCols(o) <= MAX.values : false)],
-      ["shp", `Shapefile of the cells (up to ${wordy(MAX.shp)})`, cells <= MAX.shp], ["geojson", `GeoJSON of the cells (up to ${wordy(MAX.geojson)})`, cells <= MAX.geojson], ["csv", `CSV, one row per cell (up to ${wordy(MAX.csv)})`, cells <= MAX.csv]];
-    const pick = k => { if (first) return k === "tif" ? !hex && !mine : (hex || mine) && k === "shp"; return was.has(k); };
-    $("#gFiles").innerHTML = list.map(([k, n, can]) => `<label class="${can ? "" : "off"}"><input type="checkbox" name="gFile" value="${k}" ${can && pick(k) ? "checked" : ""} ${can ? "" : "disabled"}> ${esc(n)}</label>`).join("");
+      ["shp", `Shapefile of the cells (up to ${wordy(MAX.shp)}, and ${MAX.fields} columns)`, cells <= MAX.shp && nCols(o) <= MAX.fields], ["geojson", `GeoJSON of the cells (up to ${wordy(MAX.geojson)})`, cells <= MAX.geojson], ["csv", `CSV, one row per cell (up to ${wordy(MAX.csv)})`, cells <= MAX.csv]];
+    $("#gFiles").innerHTML = list.map(([k, n, can]) => `<label class="${can ? "" : "off"}"><input type="checkbox" name="gFile" value="${k}" ${can && want.has(k) ? "checked" : ""} ${can ? "" : "disabled"}> ${esc(n)}</label>`).join("");
+  }
+  /* why Build would save no file, or "" */
+  function noFile() {
+    if (ticks("gFile").length) return "";
+    if (!$$("input[name=gFile]:not(:disabled)").length) return "No file can hold this many cells: use the cell size suggested under the grid, or a smaller area.";
+    return "No file that these choices allow is ticked: tick one under Files.";
   }
   async function loadOwn() {
     const f = $("#gOwnFile").files;
@@ -259,6 +292,17 @@ WG.grid = (function () {
   /* ---------- weather: a value per weather cell ---------- */
   const wxIndex = (g, lon, lat) => [Math.round((lat - g.lat0) / g.dLat), Math.round((lon - g.lon0) / g.dLon)];
   const wxCentre = (g, j, i) => [g.lon0 + i * g.dLon, g.lat0 + j * g.dLat];
+  /* a weather cell's outline with a point every 0.002° at most, as a parallel's image curves away from a straight line
+     (44 m over a NASA POWER cell); a side two cells share has the same points in both */
+  function wxRing(g, j, i) {
+    const nx = Math.ceil(g.dLon / 0.002), ny = Math.ceil(g.dLat / 0.002), x = t => g.lon0 + (i - 0.5 + t / nx) * g.dLon, y = t => g.lat0 + (j - 0.5 + t / ny) * g.dLat, out = [];
+    for (let t = 0; t < ny; t++) out.push([x(0), y(t)]);
+    for (let t = 0; t < nx; t++) out.push([x(t), y(ny)]);
+    for (let t = ny; t > 0; t--) out.push([x(nx), y(t)]);
+    for (let t = nx; t > 0; t--) out.push([x(t), y(0)]);
+    out.push(out[0]);
+    return out;
+  }
   async function wxSeries(o, cells, status) {
     const d0 = Wd.parseDay(o.from), d1 = Wd.parseDay(o.to), out = [];
     let done = 0;
@@ -339,15 +383,24 @@ WG.grid = (function () {
     });
     await breathe();
     if (o.wx) {
-      const g = WX_GRID[o.src], bb = area.bb, [j0, i0] = wxIndex(g, bb[0], bb[1]), [j1, i1] = wxIndex(g, bb[2], bb[3]);
-      const cells = [];
-      for (let j = Math.min(j0, j1); j <= Math.max(j0, j1); j++) for (let i = Math.min(i0, i1); i <= Math.max(i0, i1); i++) {
-        const [lon, lat] = wxCentre(g, j, i), hx = g.dLon / 2, hy = g.dLat / 2, c = { j, i, lon, lat, n: 0 }, id = cells.length + 1;
-        G.paint(W, [[[lon - hx, lat - hy], [lon - hx, lat + hy], [lon + hx, lat + hy], [lon + hx, lat - hy], [lon - hx, lat - hy]].map(([x, y]) => P.fwd(x, y))], k => { if (mask[k]) { wxIdx[k] = id; c.n++; } });
-        cells.push(c);
+      status("Placing the weather cells…");
+      const g = WX_GRID[o.src], bb = area.bb, [j0, i0] = wxIndex(g, bb[0], bb[1]), [j1, i1] = wxIndex(g, bb[2], bb[3]), cells = [], ids = new Map();
+      const wxId = (j, i) => { const key = `${j},${i}`; if (!ids.has(key)) { const [lon, lat] = wxCentre(g, j, i); cells.push({ j, i, lon, lat, n: 0 }); ids.set(key, cells.length); } return ids.get(key); };
+      // one more all round: a straight edge of the boundary bows past its corners' box
+      for (let j = Math.min(j0, j1) - 1; j <= Math.max(j0, j1) + 1; j++) for (let i = Math.min(i0, i1) - 1; i <= Math.max(i0, i1) + 1; i++) {
+        const id = wxId(j, i);
+        G.paint(W, [wxRing(g, j, i).map(([x, y]) => P.fwd(x, y))], k => { if (mask[k]) wxIdx[k] = id; });
       }
-      // only the weather cells some grid cell falls in
-      const used = cells.filter(c => c.n), renum = new Uint16Array(cells.length + 1);
+      // the painted edges are within a millimetre of the true ones, so only a cell beside another value can be wrong: those take the weather cell of their centre
+      const { rows, cols } = W, near = [];
+      for (let r = 0, k = 0; r < rows; r++) for (let c = 0; c < cols; c++, k++) {
+        const v = wxIdx[k];
+        if (mask[k] && (!v || (c ? wxIdx[k - 1] : 0) !== v || (c < cols - 1 ? wxIdx[k + 1] : 0) !== v || (r ? wxIdx[k - cols] : 0) !== v || (r < rows - 1 ? wxIdx[k + cols] : 0) !== v)) near.push(k);
+      }
+      near.forEach(k => { const r = Math.floor(k / cols), [lon, lat] = P.inv(...S.L.centre(W.i0 + k - r * cols, W.j1 - r)); wxIdx[k] = wxId(...wxIndex(g, lon, lat)); });
+      for (let k = 0; k < wxIdx.length; k++) if (wxIdx[k]) cells[wxIdx[k] - 1].n++;
+      // only the weather cells some grid cell falls in, south to north and west to east
+      const used = cells.filter(c => c.n).sort((a, b) => a.j - b.j || a.i - b.i), renum = new Uint16Array(cells.length + 1);
       cells.forEach((c, a) => { if (c.n) renum[a + 1] = used.indexOf(c) + 1; });
       for (let k = 0; k < wxIdx.length; k++) if (wxIdx[k]) wxIdx[k] = renum[wxIdx[k]];
       ctx.wxCells = used;
@@ -409,22 +462,38 @@ WG.grid = (function () {
       covers[c] = cov.indexOf(Math.max(...cov.slice(1)), 1);
       if (c % 2000 === 0) { status(`Weighing the cells: ${c.toLocaleString()} of ${list.length.toLocaleString()}…`); await breathe(); }
     }
-    ctx.wxCells = g ? [...wxMap.values()] : null;
+    ctx.wxCells = null;
+    if (g) {
+      // a cell's weather is that of the one weather cell covering most of it, so it matches its row in weather/cells.csv; only those cells are read
+      const all = [...wxMap.values()];
+      weights.forEach(w => { let top = 0; w.home = null; w.wx.forEach((n, id) => { if (n > top) { top = n; w.home = all[id - 1]; } }); if (w.home) w.home.used = true; });
+      ctx.wxCells = all.filter(c => c.used).sort((a, b) => a.j - b.j || a.i - b.i);
+      ctx.wxCells.forEach((c, a) => { c.id = a + 1; });
+      weights.forEach(w => { w.home = w.home ? w.home.id : 0; });
+    }
     const cover = [0, 0, 0, 0, 0, 0];
     covers.forEach(v => { cover[v]++; });
     let at = null;
     if (S.W) { at = new Int32Array(S.W.count); list.forEach((c, n) => { at[c.k] = n + 1; }); }
     return { mode: "area", S, W: S.W || null, L: S.L || null, P, list, weights, covers, at, count: list.length, cover };
   }
-  /* in the weighed mode each column has one value per cell: a mean of what covers it, or for a code the largest share */
+  /* in the weighed mode each column has one value per cell: a mean of the soils covering it, or for a code the value
+     covering the most, counted by value (one group can span map units); the weather of its one weather cell. A cell
+     covered mostly by buildings, roads or water has no soil values, as at a centre. */
   function weigh(res, bands) {
     bands.forEach(b => {
       if (b.by === "mask") return;
-      const vals = new Float32Array(res.count).fill(NO), key = b.by === "soil" ? "soil" : "wx";
+      const vals = new Float32Array(res.count).fill(NO);
       res.weights.forEach((w, c) => {
-        let s = 0, t = 0, top = 0, best = NO;
-        w[key].forEach((n, id) => { const v = b.lut[id]; if (v === NO) return; s += v * n; t += n; if (n > top) { top = n; best = v; } });
-        if (t) vals[c] = b.cat ? best : s / t;
+        if (b.by === "wx") { if (w.home) vals[c] = b.lut[w.home]; return; }
+        if (res.covers[c] >= 2 && res.covers[c] <= 4) return;
+        let s = 0, t = 0;
+        const per = b.cat ? new Map() : null;
+        w.soil.forEach((n, id) => { const v = b.lut[id]; if (v === NO) return; s += v * n; t += n; if (per) per.set(v, (per.get(v) || 0) + n); });
+        if (!t) return;
+        if (!per) { vals[c] = s / t; return; }
+        let top = 0;
+        per.forEach((n, v) => { if (n > top) { top = n; vals[c] = v; } });
       });
       b.vals = vals;
     });
@@ -437,12 +506,15 @@ WG.grid = (function () {
     if (o.shape !== "own" && !(o.size >= 0.2)) return toast("The smallest cell is 20 cm.");
     if (o.shape === "own" && !own) return toast("Choose your grid file first.");
     if (!o.depths && o.soil.length) return toast("Layer bottoms must be positive numbers separated by commas.");
+    if (o.soil.length && !o.depths.length) return toast("Give the bottom of each layer, or untick the soil columns for each layer.");
+    if (o.files.includes("shp") && nCols(o) > MAX.fields) return toast(`A shapefile holds ${MAX.fields} columns at most, and these choices make ${nCols(o)}.`);
     if (o.wx && !o.wxVars.length) return toast("Tick at least one weather column, or leave out the weather.");
     if (o.wx && !(o.from && o.to && o.from <= o.to)) return toast("Choose a first day before the last day.");
     if (!o.site.length && !o.soil.length && !o.wx) return toast("Tick at least one soil or weather column.");
+    if (noFile()) return toast(noFile());
     busy = true;
     $("#gBuild").disabled = $("#gSave").disabled = true;
-    const S = setup(o);
+    const S = setup(o), at = gen;
     try {
       if (S.W && S.W.count > MAX.window) throw new Error(`That is more cells than a browser can hold (${wordy(S.W.count)} in the area's bounding box)`);
       const units = area.result.soil.units, ids = Object.keys(units), ctx = { ids };
@@ -460,6 +532,8 @@ WG.grid = (function () {
       const seen = new Set();
       bands.forEach(b => { let s = b.short.slice(0, 10).toUpperCase(), n = 1; while (seen.has(s)) s = `${b.short.slice(0, 8).toUpperCase()}${n++}`; seen.add(s); b.short = s; });
       if (res.mode === "area") weigh(res, bands);
+      // a choice changed, or the sheet was opened again, while this ran: these cells are not what the sheet now says
+      if (gen !== at) throw new Error("the choices changed while it was building; build it again");
       job = { o, res, bands, series, ids, units, wxCells: ctx.wxCells };
       stats();
       $("#gBand").innerHTML = bands.map((b, i) => `<option value="${i}">${esc(b.label)}${b.unit ? ` (${esc(b.unit)})` : ""}</option>`).join("");
@@ -580,12 +654,12 @@ WG.grid = (function () {
     const { o, res, bands } = J, P = res.P, L = res.L, shapeTxt = { square: "square, north up", turned: `square, turned ${o.angle}° clockwise`, hex: `hexagons, points up${o.angle ? `, turned ${o.angle}°` : ""}`, hexflat: `hexagons, flat side up${o.angle ? `, turned ${o.angle}°` : ""}`, own: `your grid, ${own ? own.name : ""}` }[o.shape];
     const lines = [`WindGuard TX area grid: ${area.name}`, `Made ${new Date().toISOString().slice(0, 10)} with ${location.origin}${location.pathname}`, "",
       `Cells: ${res.count.toLocaleString()}, ${shapeTxt}${L ? `, size ${o.size} m (${fmt(L.area, L.area < 1 ? 3 : 1)} m2 each; a hexagon's size is its width across the flats)` : ""}.`,
-      `Coordinates: ${P.name}.${L ? ` Origin of the lattice: ${L.ox}, ${L.oy}. Rows and columns are whole steps from it, so two grids of one size and origin line up.` : ""}`,
-      o.rule === "area" || o.shape === "own" ? "A cell's value: weighted by what covers it, from 25 points in the cell's box; a code (map unit, group, weather cell) is the one covering the most." : "A cell's value: what lies at its centre. A cell is in the grid when its centre is inside the boundary.", "",
+      `Coordinates: ${P.name}.${L ? ` Origin of the lattice: ${L.ox}, ${L.oy}. Rows and columns are whole steps from it, so two grids of ${o.angle ? "one size, angle" : "one size"} and origin line up.` : ""}`,
+      o.rule === "area" || o.shape === "own" ? `A cell's value: weighted by what covers it, from 25 points in the cell's box; a code (map unit, group, weather cell) is the one covering the most${o.wx ? ", and the weather columns are that weather cell's" : ""}.` : "A cell's value: what lies at its centre. A cell is in the grid when its centre is inside the boundary.", "",
       "How much detail this holds: finer cells line up with other grids but add no information. The soil survey is mapped at 1:12,000 to 1:24,000 and each map unit mixes soils without showing where each one lies; the weather comes in cells of 4 km or more.", "",
       `Soil: USDA-NRCS SSURGO through Soil Data Access; within a map unit ${o.comp === "dominant" ? "the main soil that has the value" : "all its soils, weighted by their %"}. A layer below the end of a profile is left blank.`,
       area.result.ex ? "Buildings (FEMA/ORNL USA Structures), roads (Census TIGER, widened by road class) and water (USGS NHD, and SSURGO Water map units) are marked in the cover column, and such cells have no soil values." : "Buildings and roads were not marked; SSURGO Water map units are.",
-      o.wx ? `Weather: ${WX_GRID[o.src].name}, ${o.from} to ${o.to}, values no station reports left out. Each grid cell gives the means of its weather cell (wx_cell); weather/cells.csv lists them${o.daily ? " and weather/ has their daily tables" : ""}.` : "Weather: not asked for.",
+      o.wx ? `Weather: ${WX_GRID[o.src].name}, ${o.from} to ${o.to}, values no station reports left out. Each grid cell gives the means of its weather cell (wx_cell); weather/cells.csv lists them${o.daily ? " and weather/ has their daily tables" : ""}.${o.src === "prism" ? ` ${Wd.prismNote(J.series && J.series.length ? J.series[0].rest : "gridMET")}` : ""}` : "Weather: not asked for.",
       "", NOTE, "bands.csv lists every column with its unit; soil_units.csv lists the map units.", "Files:", ...(o.files.includes("tif") ? ["  grid.tif: GeoTIFF, Float32, Deflate, one band per column, named as in bands.csv."] : []),
       ...(o.files.includes("shp") ? ["  cells.shp (.shx, .dbf, .prj, .cpg): one polygon per cell; field names are the short names in bands.csv."] : []),
       ...(o.files.includes("geojson") ? ["  cells.geojson: one polygon per cell, in longitude and latitude."] : []), ...(o.files.includes("csv") ? ["  cells.csv: one row per cell, with its centre."] : []),
@@ -620,6 +694,8 @@ WG.grid = (function () {
         });
       }
       const L = res.L, W = res.W, P = res.P;
+      // before any file is written, so nothing made is thrown away
+      if (o.files.includes("shp") && bands.length > MAX.fields) throw new Error(`A shapefile holds ${MAX.fields} columns at most, and this has ${bands.length}`);
       if (o.files.includes("tif") && L && !L.hex) {
         status("Writing the GeoTIFF: 0%");
         const [x0, y0] = L.fromUV(W.i0 * L.du, (W.j1 + 1) * L.dv);
@@ -642,7 +718,6 @@ WG.grid = (function () {
         const centre = c => { if (own2) return [c.c.cx, c.c.cy]; return L.centre(c.i ?? c.c.i, c.j ?? c.c.j); };
         const ownId = c => { const p = c.c && c.c.props; if (!p) return null; const key = Object.keys(p).find(x => /^(id|cell|grid_?id|gid|fid|objectid)$/i.test(x)) || Object.keys(p)[0]; return key ? p[key] : null; };
         if (o.files.includes("shp")) {
-          if (bands.length > MAX.fields) throw new Error(`A shapefile holds ${MAX.fields} columns at most, and this has ${bands.length}`);
           const fields = [{ name: "CELL", type: "N", width: 10, dec: 0 }, ...(own2 ? [{ name: "OWN_ID", type: "C", width: 30 }] : [{ name: "COL", type: "N", width: 9, dec: 0 }, { name: "ROW", type: "N", width: 9, dec: 0 }]),
             ...bands.map(b => ({ name: b.short, type: "N", width: b.cat ? 10 : 14, dec: b.cat ? 0 : 4, band: b }))];
           const value = (n, f) => { const c = list[n]; if (f.name === "CELL") return n + 1; if (f.name === "OWN_ID") return ownId(c); if (f.name === "COL") return c.i ?? c.c.i; if (f.name === "ROW") return c.j ?? c.c.j; return val(c, f.band); };
@@ -670,7 +745,7 @@ WG.grid = (function () {
       const zip = await M.zip(files);
       X.save(zip, `WindGuard_grid_${short(area.name, 30)}_${o.shape === "own" ? "own" : `${o.size}m_${o.shape}`}.zip`, "application/zip");
       const sized = zip.size >= 1e6 ? `${fmt(zip.size / 1e6, 1)} MB` : `${fmt(zip.size / 1e3, 0)} kB`;
-      status(`Saved: ${files.length} files, ${sized}.`);
+      status(`Saved: ${files.length} files, ${sized}.${job === J ? "" : " You changed something since: build it again."}`);
     } catch (e) {
       console.error(e);
       status(`Could not make the files: ${e.message || e}.`);

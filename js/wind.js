@@ -141,6 +141,14 @@ WG.wind = (function () {
     etr: "daily_mean_reference_evapotranspiration_alfalfa",
   };
   const GM_DAY0 = epochDay(1979, 0, 1);
+  const ACIS = "https://data.rcc-acis.org/GridData", PRISM_DAY0 = epochDay(1981, 0, 1), PRISM_BOX = [24.0625, 49.9375, -125.0208333, -66.4791667];
+  // what a file from PRISM must say: PRISM's terms ask for its name, address and the date read. rest: where its other variables came from
+  // the credit PRISM's terms ask for: its name, address and the date read
+  const prismCredit = () => `PRISM 4 km (PRISM Group, Oregon State University, https://prism.oregonstate.edu, accessed ${new Date().toISOString().slice(0, 10)}), read through ACIS (NOAA Regional Climate Centers)`;
+  const prismNote = (rest = "gridMET") => `Rain, Tmax and Tmin: ${prismCredit()}. Solar radiation, humidity and wind: ${rest || "none, as neither gridMET nor NASA POWER answered"}; PRISM has no wind. PRISM's day ends at 1200 UTC on its date, so each calendar day here holds PRISM's next date, ${rest ? `to line up with ${rest}` : "which covers most of that calendar day"}: expect a one-day difference from PRISM's own files. Its last six months are provisional and can change. ${rest ? "ET0 is FAO-56 Penman-Monteith worked out here from these, or Hargreaves (FAO-56 Eq. 52) on days without them." : "ET0 is Hargreaves (FAO-56 Eq. 52), worked out here from Tmax and Tmin alone, as there is no solar radiation, humidity or wind."}`;
+  // PRISM's last calendar day for certain: it holds PRISM's next date, which ACIS has about a day after that day ends at 1200 UTC.
+  // ACIS can have more, up to today - 1 (its PRISM date, today, ended at 1200 UTC), so later days are asked, not refused
+  const prismLast = () => today() - 3;
 
   /* gridMET's last day, read once from the length of its day axis (it is about two days behind). */
   let gmLast = null;
@@ -206,13 +214,62 @@ WG.wind = (function () {
       { p: D.precipitation_sum, et0: D.et0_fao_evapotranspiration, tmean: D.temperature_2m_mean }, j.latitude, j.longitude);
   }
 
+  /* PRISM's own 4 km daily rain, Tmax and Tmin through ACIS GridData (NOAA Regional Climate Centers), grid 21. PRISM's
+     day D is the 24 hours ending at 1200 UTC on D, so it is mostly calendar day D-1: for calendar day D this takes
+     PRISM's label D+1, which puts it on the same days as gridMET and NASA POWER (2023 at 7 airports: Tmax r 0.99-1.00
+     that way, 0.88-0.96 as labelled). ACIS answers 200 for a bad request: an empty body or an error off the grid, and
+     for Honolulu a cell in North Dakota, so the returned cell is compared with the point. A range after prismLast() is
+     asked from prismLast(), so days not out yet (ACIS gives -999) can be told from a place with no data; last is the
+     latest day with data in the answer. Nothing after today - 1 is asked: no PRISM date for it has ended. */
+  async function prismDays(lat, lon, a, b) {
+    if (lat < PRISM_BOX[0] || lat > PRISM_BOX[1] || lon < PRISM_BOX[2] || lon > PRISM_BOX[3]) throw new Error("this point is outside PRISM (contiguous US only)");
+    const elem = (name, units) => ({ name, units, prec: 2 }); // without prec, ACIS rounds temperatures to whole degrees
+    const q0 = Math.min(a, prismLast()), q1 = Math.min(b, today() - 1);
+    const res = await fetchJSON(ACIS, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ loc: `${lon.toFixed(4)},${lat.toFixed(4)}`, sdate: isoDay(q0 + 1), edate: isoDay(q1 + 1), grid: "21", meta: "ll,elev",
+      elems: [elem("pcpn", "mm"), elem("maxt", "degreeC"), elem("mint", "degreeC")] }) }, 120000, 90000).catch(e => { throw new Error(`PRISM through ACIS gave no answer (${e.message || e})`); });
+    if (res.error || !res.meta || !Array.isArray(res.data)) throw new Error(`PRISM through ACIS gave no data${res.error ? ` (${res.error})` : ""}`);
+    if (Math.abs(res.meta.lat - lat) > 0.022 || Math.abs(res.meta.lon - lon) > 0.022) throw new Error("PRISM through ACIS answered for another place, so this point seems to be outside PRISM");
+    const by = new Map(), v = x => (typeof x === "number" && x > -998 ? x : null);
+    res.data.forEach(r => by.set(parseDay(r[0]) - 1, { p: v(r[1]), tx: v(r[2]), tn: v(r[3]) }));
+    const got = [...by].filter(([, x]) => x.tx !== null || x.p !== null).map(([d]) => d);
+    // nothing on days of the last week or so may be ACIS not having them yet; on older days it is the place
+    if (!got.length) throw new Error(a > prismLast() - 7 ? "PRISM through ACIS has no data on these days at this point: its latest days may not be out yet, or the point is on open water"
+      : "PRISM has no data at this point (open water or outside the US)");
+    return { by, last: got.reduce((m, d) => Math.max(m, d)), lat: res.meta.lat, lon: res.meta.lon, elev: res.meta.elev > -1000 ? res.meta.elev * 0.3048 : null }; // ACIS gives elevation in feet
+  }
+
   /* Daily weather for the model downloads, days d0..d1 (epoch days), in SI: precipitation mm, Tmax/Tmin °C, solar
      radiation MJ/m²/d, relative humidity max/min/mean %, dew point °C, vapour pressure kPa, wind m/s at 10 m and 2 m,
-     grass ET0 mm. source "gridmet" (4 km, 1979 on, about 2 days behind; 10 m wind) or "power" (NASA POWER, 0.5°,
-     1981 on, solar from 1984, about a week behind; computed ET0). Missing values are null. */
-  /* only: a subset of the gridMET variables (e.g. ["tmmx", "tmmn"] for a temperature climatology) */
+     grass ET0 mm. source "gridmet" (4 km, 1979 on, about 2 days behind; 10 m wind), "power" (NASA POWER, 0.5°,
+     1981 on, solar from 1984, about a week behind; computed ET0) or "prism" (rain and temperature from PRISM, 4 km, 1981
+     on; solar, humidity and wind from gridMET, or NASA POWER when gridMET does not answer; computed ET0). Missing values are null. */
+  /* only: a subset of the gridMET variables (e.g. ["tmmx", "tmmn"] for a temperature climatology), or for PRISM just its own */
   async function dailyWeather(lat, lon, d0, d1, source = "gridmet", elev = null, only = null) {
     const days = [];
+    if (source === "prism") {
+      const a = Math.max(d0, PRISM_DAY0), none = last => new Error(`PRISM has no days in this range (1981 to ${isoDay(last)})`);
+      if (d1 < a) throw none(prismLast());
+      // from today on nothing is out yet: ACIS is asked only where its record ends, and the other sources not at all
+      if (a > today() - 1) throw none(await prismDays(lat, lon, a, d1).then(P => P.last, () => prismLast()));
+      const rest = async () => {
+        if (only) return { from: null };
+        try { return { from: "gridMET", w: await dailyWeather(lat, lon, a, d1, "gridmet", elev) }; } catch (e) { console.warn("PRISM's other variables from gridMET", e); }
+        try { return { from: "NASA POWER", w: await dailyWeather(lat, lon, a, d1, "power", elev), why: "gridMET did not answer" }; } catch (e) { console.warn("PRISM's other variables from NASA POWER", e); }
+        return { from: null, why: "neither gridMET nor NASA POWER answered" };
+      };
+      const [P, other] = await Promise.all([prismDays(lat, lon, a, d1), rest()]);
+      if (P.last < a) throw none(P.last); // the place has data, only not yet on these days
+      const z = elev ?? P.elev ?? 0, phi = (lat * Math.PI) / 180, w = other.w;
+      const out = { source: "prism", lat: P.lat, lon: P.lon, elev: z, rest: other.from, restWhy: other.why || null, days, prcp: [], tmax: [], tmin: [], srad: [], rhmax: [], rhmin: [], rh: [], tdew: [], vp: [], wind10: [], wind2: [], et0: [] };
+      for (let d = d0; d <= d1; d++) {
+        const c = P.by.get(d) || { p: null, tx: null, tn: null }, k = d - a, g = key => (w && k >= 0 && w[key][k] !== undefined ? w[key][k] : null);
+        days.push(d);
+        out.prcp.push(c.p); out.tmax.push(c.tx); out.tmin.push(c.tn);
+        ["srad", "rhmax", "rhmin", "rh", "tdew", "vp", "wind10", "wind2"].forEach(key => out[key].push(g(key)));
+        out.et0.push(c.tx === null || c.tn === null ? null : fao56(d - epochDay(yearOf(d), 0, 1) + 1, phi, z, c.tx, c.tn, g("tdew"), g("wind2"), g("srad")));
+      }
+      return out;
+    }
     if (source === "gridmet") {
       const j = Math.round((49.4 - lat) * 24), i = Math.round((lon + 124.7666666333) * 24);
       if (j < 0 || j > 584 || i < 0 || i > 1385) throw new Error("this point is outside gridMET (contiguous US only)");
@@ -874,6 +931,6 @@ WG.wind = (function () {
 
   return { fetchWind, analyze, yearsFor, findStation, fetchModelAt, calibrate, stationRaw, compare, nearestStations, towerFirst, exposure, trainSpan,
     wtmOn: WTM_ON, wtmEnabled: ENABLE_WTM, wtmTrial: WTM_TRIAL, TOWER_YEARS, EXPOSURE_MIN,
-    resolvePeriod, limits, isoDay, parseDay, dayLabel, today, span, gridmetLast, GM_DAY0, epochDay, dailyWeather, fao56 };
+    resolvePeriod, limits, isoDay, parseDay, dayLabel, today, span, gridmetLast, GM_DAY0, PRISM_DAY0, prismLast, prismCredit, prismNote, epochDay, dailyWeather, fao56 };
 })();
 

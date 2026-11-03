@@ -43,12 +43,12 @@ WG.templates = (function () {
     { k: "sand", head: "Sand", name: "Sand", what: "Of the fine earth", need: true, units: MASS, ex: [40, 38, 35] },
     { k: "silt", head: "Silt", name: "Silt", what: "Of the fine earth; if left out, 100 − sand − clay", on: true, units: MASS, ex: [35, 32, 30] },
     { k: "clay", head: "Clay", name: "Clay", what: "Of the fine earth", need: true, units: MASS, ex: [25, 30, 35] },
-    { k: "om", head: "Organic matter", name: "Organic matter", what: "If left out, from organic carbon, else 1 %", on: true, units: MASS, ex: [1.5, 0.9, 0.5] },
+    { k: "om", head: "Organic matter", name: "Organic matter", what: "If left out, from organic carbon, else blank where the file can do without", on: true, units: MASS, ex: [1.5, 0.9, 0.5] },
     { k: "oc", head: "Organic carbon", name: "Organic carbon", what: "Instead of organic matter (× 1.724)", units: MASS, ex: [0.87, 0.52, 0.29] },
     { k: "bd", head: "Bulk density", name: "Bulk density", what: "If left out, estimated (Saxton & Rawls 2006)", units: BD, ex: [1.4, 1.45, 1.5] },
     { k: "ll", head: "Wilting point", name: "Wilting point", what: "Water at 15 bar, whole soil; if left out, estimated", units: WATER, ex: [0.12, 0.15, 0.18] },
     { k: "dul", head: "Field capacity", name: "Field capacity", what: "Water at 1/3 bar, whole soil; if left out, estimated", units: WATER, ex: [0.25, 0.27, 0.3] },
-    { k: "sat", head: "Saturation", name: "Saturation", what: "Water at saturation; if left out, estimated", units: WATER, ex: [0.42, 0.41, 0.4] },
+    { k: "sat", head: "Saturation", name: "Saturation", what: "Water at saturation, by volume; if left out, estimated", units: WATER, ex: [0.42, 0.41, 0.4] },
     { k: "ksat", head: "Ksat", name: "Ksat", what: "Saturated conductivity; if left out, estimated", units: KSAT, ex: [12, 8, 5] },
     { k: "ph", head: "pH", name: "pH", what: "In water, 1:1", units: one("pH", "1:1 water"), ex: [7.5, 7.8, 8] },
     { k: "cec", head: "CEC", name: "CEC", what: "Cation exchange capacity", units: one("cmol/kg", "cmol/kg"), ex: [18, 20, 22] },
@@ -58,7 +58,7 @@ WG.templates = (function () {
   ];
   const KINDS = {
     weather: { cols: WEATHER, file: "weather_template", title: "What the file should look like, and a template to fill in",
-      intro: "One row per day, with the column names in the first row. CSV, text or Excel (its first sheet). Columns can be in any order and extra columns are ignored; a blank cell, text or −99 means missing. Files from NASA POWER, Open-Meteo, Campbell loggers (TOA5), GHCN, CIMIS, Davis and similar load as they come." },
+      intro: "One row per day, with the column names in the first row. CSV, text or Excel (its first sheet). Columns can be in any order and extra columns are ignored; a blank cell, text, −99 or below, 999 or 9999 means missing, and rows through the day are summarised to days. Files from NASA POWER, Open-Meteo, Campbell loggers (TOA5), GHCN, CIMIS, Davis and similar load as they come." },
     soil: { cols: SOIL, file: "soil_template", title: "What a soil file should look like, and a template to fill in",
       intro: "One row per layer, with the column names in the first row. CSV, text or Excel (its first sheet). Columns can be in any order and extra columns are ignored; a blank cell means missing, and missing water retention, bulk density and Ksat are estimated from sand, clay and organic matter." },
   };
@@ -79,14 +79,18 @@ WG.templates = (function () {
     const head = c => `${c.k === "wind" ? `wind at ${+S.height || 2} m` : c.head} (${unitOf("weather", c)[2]})`;
     return { header: [...dateHead, ...cols.map(head)], rows: [0, 1, 2].map(i => [...dateCells(i), ...cols.map(c => rnd(unitOf("weather", c)[3](c.ex[i])))]) };
   }
+  /* the soil template; survey: whether its rows are the survey's, as asked, or the examples for want of any */
   function soilTable() {
     const on = SOIL.filter(c => isOn("soil", c)), S = state.soil;
     let layers = null;
     if (S.rows === "survey") {
-      try { const s = M.surveySoil(WG.state); layers = s ? WG.writerUtil.soilRows(s) : null; } catch (e) { /* nothing to start from */ }
+      // as the sheet's own profile starts: the horizons the model files use, else all of them
+      let s = null;
+      try { s = M.surveySoil(WG.state); layers = s ? WG.writerUtil.soilRows(s) : null; } catch (e) { layers = s ? s.layers : null; }
+      if (layers && !layers.length) layers = null;
     }
     const rows = layers ? layers.map(l => on.map(c => (Number.isFinite(l[c.k]) ? rnd(unitOf("soil", c)[3](l[c.k])) : ""))) : [0, 1, 2].map(i => on.map(c => rnd(unitOf("soil", c)[3](c.ex[i]))));
-    return { header: on.map(c => `${c.head} (${unitOf("soil", c)[2]})`), rows };
+    return { header: on.map(c => `${c.head} (${unitOf("soil", c)[2]})`), rows, survey: !!layers };
   }
   const tableOf = kind => (kind === "weather" ? weatherTable() : soilTable());
 
@@ -95,13 +99,12 @@ WG.templates = (function () {
     const sel = c.units.length > 1 ? `<select data-tpl-unit="${c.k}" aria-label="Unit of ${esc(c.name)}">${c.units.map(u => `<option value="${u[0]}" ${unitOf(kind, c) === u ? "selected" : ""}>${esc(u[1])}</option>`).join("")}</select>` : esc(c.units[0][1]);
     return c.k === "wind" ? `${sel} <label class="tpl-h">at <input type="number" data-tpl-height min="0.5" max="50" step="0.5" value="${state.weather.height}" aria-label="Height the wind is measured at, in metres"> m</label>` : sel;
   };
-  const sample = kind => {
-    const t = tableOf(kind);
-    return `<thead><tr>${t.header.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${t.rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody>`;
-  };
-  const fillNote = kind => (kind === "weather" ? "Replace these example rows with your days." : state.soil.rows === "survey" ? "These are this location's survey layers: change them to yours." : "Replace these example rows with your layers.");
+  const sample = t => `<thead><tr>${t.header.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${t.rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  // what the rows shown are: the survey's only when they are
+  const fillNote = (kind, t) => (kind === "weather" ? "Replace these example rows with your days." : t.survey ? "These are this location's survey layers: change them to yours."
+    : state.soil.rows === "survey" ? "The survey has no soil layers here (or has not come in yet), so these are example rows: replace them with your layers." : "Replace these example rows with your layers.");
   function box(kind) {
-    const K = KINDS[kind], S = state[kind];
+    const K = KINDS[kind], S = state[kind], t = tableOf(kind);
     return `<details class="tpl" data-tpl="${kind}" ${S.open ? "open" : ""}><summary>${esc(K.title)}</summary>
       <p class="fine">${esc(K.intro)}</p>
       <p class="fine"><b>Tick the columns you have and choose their units.</b> The template's column names then say the units, so your file needs nothing else.</p>
@@ -111,15 +114,15 @@ WG.templates = (function () {
       </tbody></table></div>
       ${kind === "soil" ? `<div class="pv-tools"><label class="pv-lab">Rows in the template <select data-tpl-rows><option value="example" ${S.rows === "example" ? "selected" : ""}>Examples</option><option value="survey" ${S.rows === "survey" ? "selected" : ""}>This location's survey layers, to edit</option></select></label></div>` : ""}
       <h4>Your template</h4>
-      <div class="table-wrap"><table class="grid tpl-show" data-tpl-show>${sample(kind)}</table></div>
-      <p class="fine" data-tpl-note>${esc(fillNote(kind))}</p>
+      <div class="table-wrap"><table class="grid tpl-show" data-tpl-show>${sample(t)}</table></div>
+      <p class="fine" data-tpl-note>${esc(fillNote(kind, t))}</p>
       <div class="area-actions"><button class="btn small" data-tpl-save="csv">Download the template (CSV)</button><button class="btn small" data-tpl-save="xlsx">Download the template (Excel)</button></div>
     </details>`;
   }
   function wire(kind, root) {
     const el = root.querySelector(`[data-tpl="${kind}"]`), S = state[kind];
     if (!el) return;
-    const redraw = () => { el.querySelector("[data-tpl-show]").innerHTML = sample(kind); el.querySelector("[data-tpl-note]").textContent = fillNote(kind); };
+    const redraw = () => { const t = tableOf(kind); el.querySelector("[data-tpl-show]").innerHTML = sample(t); el.querySelector("[data-tpl-note]").textContent = fillNote(kind, t); };
     el.addEventListener("toggle", () => { S.open = el.open; });
     const change = e => {
       const t = e.target, d = t.dataset;

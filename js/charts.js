@@ -277,11 +277,20 @@ WG.charts = (function () {
       title: { display: !!title, text: title || "", color: C.ink, font: { size: Math.round((fontPx || 11) * 1.25), weight: "600" }, padding: { top: 2, bottom: subtitle ? 2 : 10 } },
       subtitle: { display: !!subtitle, text: subtitle || "", color: C.muted, font: { size: Math.round((fontPx || 11) * 0.95) }, padding: { bottom: 10 } } };
     cfg.plugins = [...(cfg.plugins || []), { id: "whiteBg", beforeDraw: c => { const x = c.ctx; x.save(); x.globalCompositeOperation = "destination-over"; x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.restore(); } }];
-    // a detached canvas: Chart.js takes its width/height as the display size and multiplies by the pixel ratio itself
+    // a detached canvas: Chart.js takes its width/height as the display size and multiplies by the pixel ratio itself.
+    // It keeps whole display pixels and floors their product, so the file is then set to the exact size asked for
     canvas.width = Math.round(w); canvas.height = Math.round(h);
     const keep = Chart.defaults.font.size;
     if (fontPx) Chart.defaults.font.size = fontPx;
-    try { return new Chart(canvas, cfg); } finally { Chart.defaults.font.size = keep; }
+    try {
+      const chart = new Chart(canvas, cfg), px = Math.round(w * ratio), py = Math.round(h * ratio);
+      if (canvas.width !== px || canvas.height !== py) {
+        canvas.width = px; canvas.height = py;
+        chart.ctx.setTransform(px / chart.width, 0, 0, py / chart.height, 0, 0);
+        chart.draw();
+      }
+      return chart;
+    } finally { Chart.defaults.font.size = keep; }
   }
   /* data of a chart for a CSV: { header, rows } with one row per label */
   function table(id) {

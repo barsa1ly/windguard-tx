@@ -194,13 +194,27 @@ WG.gridfiles = (function () {
     return new Blob([head, ...parts, tail], { type: "image/tiff" });
   }
 
+  /* ---------- ring order ---------- */
+  /* twice a ring's signed area, positive counter-clockwise; taken from its first point, so a 20 cm cell in degrees keeps its digits */
+  function area2(r) {
+    const [x0, y0] = r[0];
+    let s = 0;
+    for (let k = 1; k + 1 < r.length; k++) s += (r[k][0] - x0) * (r[k + 1][1] - y0) - (r[k + 1][0] - x0) * (r[k][1] - y0);
+    return s;
+  }
+  /* a polygon's rings, the outer one first, closed and turned whichever way they came: the outer clockwise and holes
+     the other way when cw (a shapefile), or the reverse (GeoJSON, RFC 7946); both formats want closed rings */
+  const closed = r => (r.length && (r[0][0] !== r[r.length - 1][0] || r[0][1] !== r[r.length - 1][1]) ? [...r, r[0]] : r);
+  const orient = (R, cw) => R.map(closed).map((r, i) => ((area2(r) < 0) === ((i === 0) === cw) ? r : r.slice().reverse()));
+
   /* ---------- shapefile ---------- */
-  /* n polygons; rings(k) gives the rings of cell k, each closed and clockwise for an outer ring. fields: [{ name (10
-     characters at most), type "N" | "C", width, dec }], value(k, f) the cell's value for field f (null for blank). */
+  /* n polygons; rings(k) gives the rings of cell k, each closed, the outer one first: they are written with the outer
+     ring clockwise and holes counter-clockwise, as the format wants. fields: [{ name (10 characters at most), type
+     "N" | "C", width, dec }], value(k, f) the cell's value for field f (null for blank). */
   function shapefile(base, n, rings, fields, value, prj) {
     const shapes = new Array(n);
     let bytes = 100;
-    for (let k = 0; k < n; k++) { const R = rings(k), pts = R.reduce((a, r) => a + r.length, 0); shapes[k] = R; bytes += 8 + 44 + 4 * R.length + 16 * pts; }
+    for (let k = 0; k < n; k++) { const R = orient(rings(k), true), pts = R.reduce((a, r) => a + r.length, 0); shapes[k] = R; bytes += 8 + 44 + 4 * R.length + 16 * pts; }
     const shp = new ArrayBuffer(bytes), sv = new DataView(shp), shx = new ArrayBuffer(100 + 8 * n), xv = new DataView(shx);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, at = 100;
     for (let k = 0; k < n; k++) {
@@ -251,11 +265,11 @@ WG.gridfiles = (function () {
   }
 
   /* ---------- GeoJSON ---------- */
-  /* lon-lat polygons with properties (RFC 7946: outer rings counter-clockwise), as a Blob built in pieces */
+  /* lon-lat polygons with properties (RFC 7946: outer rings counter-clockwise, holes clockwise, whichever way they come), as a Blob built in pieces */
   function geojson(n, ringsLonLat, props) {
     const parts = ['{"type":"FeatureCollection","features":['];
     for (let k = 0; k < n; k++) {
-      const R = ringsLonLat(k).map(r => r.slice().reverse().map(([x, y]) => [+x.toFixed(8), +y.toFixed(8)]));
+      const R = orient(ringsLonLat(k).map(r => r.map(([x, y]) => [+x.toFixed(8), +y.toFixed(8)])), false);
       parts.push(`${k ? "," : ""}{"type":"Feature","properties":${JSON.stringify(props(k))},"geometry":{"type":"Polygon","coordinates":${JSON.stringify(R)}}}`);
     }
     parts.push("]}");

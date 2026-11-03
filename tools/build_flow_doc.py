@@ -482,10 +482,10 @@ SOURCES = [
      "built into the app (data/layers.js and PNG overlays)", "statewide grid", "display only"),
     ("Base maps; county lines", "Esri, USGS, OpenStreetMap; U.S. Census TIGER (county lines)", "map tiles; TIGERweb map "
      "service drawn per tile", "—", "switch base map"),
-    ("Daily weather for model files (data sheet)", "University of Idaho gridMET; NASA POWER; or your own daily file",
-     "THREDDS OPeNDAP, 9 variables (direct); POWER daily API (direct); your CSV, text or Excel file read in the browser",
-     "4 km, 1979 on; 0.5°, 1981 on; your station", "NASA POWER; gaps in your file can be filled from gridMET"),
-    ("Atmospheric CO₂ (APSIM files)", "NOAA GML Mauna Loa annual means", "built into the app", "1979–2025, +2.5 ppm a year after",
+    ("Daily weather for model files (data sheet)", "University of Idaho gridMET; PRISM (Oregon State University); NASA POWER; or your own daily file",
+     "THREDDS OPeNDAP, 9 variables (direct); PRISM's rain and temperature through ACIS GridData (NOAA RCC), the rest from gridMET; POWER daily API (direct); your CSV, text or Excel file read in the browser",
+     "4 km, 1979 on; 4 km, 1981 on; 0.5°, 1981 on; your station", "NASA POWER; gaps in your file can be filled from gridMET"),
+    ("Atmospheric CO₂ (APSIM files)", "NOAA GML Mauna Loa annual means", "built into the app", "1959–2025, +2.5 ppm a year after, the 1959 value before",
      "—"),
     ("Your soil profile (data sheet)", "your lab results or edits", "typed into the sheet or read from a CSV in the browser",
      "your layers", "blanks estimated with Saxton & Rawls (2006)"),
@@ -551,7 +551,7 @@ SOIL_CALC = [
 ]
 
 MODEL_CALC = [
-    ("Read the weather", "gridMET 9 variables, NASA POWER daily, or your file (columns found by name, units converted, wind "
+    ("Read the weather", "gridMET 9 variables, PRISM through ACIS with gridMET's other variables (each calendar day holds PRISM's next date), NASA POWER daily, or your file (columns found by name, units converted, wind "
      "moved to 10 and 2 m by the log law); dates cut to the source's record", "dates → daily series",
      "wind.js · `dailyWeather`; models.js · `parseWeatherCSV`"),
     ("Fill your file's gaps (optional)", "missing days taken from gridMET for the same days, not its ET₀; then ET₀ by "
@@ -564,7 +564,7 @@ MODEL_CALC = [
      "the dates lack a month or a variable", "series → .WTH header, .met, .WP1, weather-wgn.cli",
      "writers.js · `tavAmp`, `wp1Stats`, `swatWgn`"),
     ("Soil layers", "each model's usual layers, the horizons as they are, or your depths (thickness-weighted means, "
-     "harmonic Ksat); stops at bedrock", "profile → model layers", "models.js · `relayer`; writers.js"),
+     "OM, OC, CaCO3 and N by mass, harmonic Ksat); stops at bedrock", "profile → model layers", "models.js · `relayer`; writers.js"),
     ("Write and pack", "each model's fixed-width or JSON layout, a README per folder, NOT_WRITTEN.txt where a model "
      "cannot be made; one zip", "series, soil → zip", "writers.js; datasheet.js · `build`"),
 ]
@@ -600,7 +600,7 @@ RESULTS = [
      "SSURGO polygons and components; USA Structures, TIGER and NHD left out"),
     ("Statewide map colours", "pre-computed offline", "SSURGO WEG/I (UC Davis SoilWeb rasters), NRCS C, NASA POWER monthly wind"),
     ("Model files (data sheet zip)", "each model's layout, gaps filled where the model needs it",
-     "gridMET, NASA POWER or your file; the survey soil or yours"),
+     "gridMET, PRISM, NASA POWER or your file; the survey soil or yours"),
     ("Figure and table downloads", "charts redrawn at the chosen size and DPI; CSV with units", "the results above, in the "
      "units chosen"),
 ]
@@ -618,6 +618,7 @@ CODE = [
     ("js/downloads.js", "the units sheet, figure sheet (size, DPI, format) and CSV tables"),
     ("js/models.js", "weather and soil structures for model files, your weather and soil files, soil re-layering, zip"),
     ("js/writers.js", "DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop and plain CSV writers"),
+    ("js/century.js", "CENTURY 4.0 and 4.5: monthly weather and the site file for each version"),
     ("js/datasheet.js", "the data sheet: weather source, dates, soil, layers, models; builds the zip"),
     ("js/preview.js", "the data sheet's preview: charts and tables of what a download will hold, before it is saved"),
     ("js/templates.js", "the layout of your own weather and soil files: tick the columns, choose units, download a template"),
@@ -653,9 +654,9 @@ STEPS = [
     ("Changes.", " Editing the soil layer, the threshold or the units recalculates in the browser with no new downloads. "
      "Changing the period, the model or the calibration station downloads again."),
     ("Downloads.", " Every chart can be saved as PNG, TIFF or JPEG at a chosen size and DPI, or as CSV. The data sheet "
-     "reads daily weather for the chosen dates (gridMET, NASA POWER or your file), takes the survey soil or yours, and "
-     "writes files for DSSAT, SWAT+, EPIC, APEX, APSIM and AquaCrop into one zip (section 8). Its Preview button draws all of "
-     "that as charts and tables first, with nothing saved."),
+     "has tabs for weather files, soil files or both: it reads daily weather for the chosen dates (gridMET, PRISM, NASA POWER or "
+     "your file), takes the survey soil or yours, and writes files for DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop and CENTURY into "
+     "one zip (section 8). Its Preview button draws all of that as charts and tables first, with nothing saved."),
 ]
 
 LIMITS = [

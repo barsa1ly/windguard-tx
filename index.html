@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-  <link rel="stylesheet" href="css/app.css?v=32">
+  <link rel="stylesheet" href="css/app.css?v=36">
 </head>
 <body>
 <div id="app" class="app">
@@ -283,7 +283,8 @@
           <div class="card-h"><h3>Reanalysis vs measured wind</h3>
             <span class="card-tools"><select id="stnSel" class="mini-select" aria-label="Calibration station"></select><button class="dl-btn" data-fig="chCal" title="Download this figure or its data" aria-label="Download calibration chart"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></span></div>
           <div class="chart-box"><canvas id="chCal"></canvas></div>
-          <div class="kv" id="calKv" style="margin-top:10px"></div>
+          <div class="card-h cal-sub"><h3>Station against the reanalysis</h3><button class="dl-btn" data-csv="calKv" title="Download this table as CSV" aria-label="Download the station and reanalysis comparison as CSV"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></button></div>
+          <div class="kv" id="calKv"></div>
           <p class="fine">Hourly reanalysis smooths wind over a 9–50 km cell and misses many gusty hours. Calibration maps its speeds, month by month, onto the distribution measured at the station (quantile mapping trained on the same hours at the station), and keeps the reanalysis timing and direction for this point.</p>
         </div>
 
@@ -393,7 +394,7 @@
     <nav class="seg-nav" id="unitPresets" aria-label="Unit systems"></nav>
     <div class="sheet-body">
       <div class="table-wrap"><table class="grid units-table" id="unitsTable"></table></div>
-      <p class="fine">Every number on screen, in the charts and in CSV tables follows this table, and your choice is remembered on this device. Model files (DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop) always use each model's own units. Values defined in US units keep the original in brackets: erodibility I and the risk classes are NRCS figures in tons per acre per year, and practice specifications come from Texas NRCS standards.</p>
+      <p class="fine">Numbers on screen, the charts and the CSV downloads of charts and tables follow this table, and your choice is remembered on this device. Two CSV files keep fixed units, named in their columns: the soil profile from the Soil tab (cm, cm/h) and the area analysis (acres, t/ac/yr). Model files (DSSAT, SWAT+, EPIC, APEX, APSIM, AquaCrop) always use each model's own units. Erodibility I is an NRCS figure in tons per acre per year, and the risk classes are this app's own, set in the same unit. Practice specifications come from Texas NRCS standards and keep the original in brackets when converted.</p>
     </div>
   </div>
 
@@ -463,25 +464,26 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="data/layers.js?v=32"></script>
-<script src="data/stations.js?v=32"></script>
-<script src="js/util.js?v=32"></script>
-<script src="js/units.js?v=32"></script>
-<script src="js/export.js?v=32"></script>
-<script src="js/soil.js?v=32"></script>
-<script src="js/wind.js?v=32"></script>
-<script src="js/charts.js?v=32"></script>
-<script src="js/practices.js?v=32"></script>
-<script src="js/methods.js?v=32"></script>
-<script src="js/app.js?v=32"></script>
-<script src="js/downloads.js?v=32"></script>
-<script src="js/models.js?v=32"></script>
-<script src="js/writers.js?v=32"></script>
-<script src="js/preview.js?v=32"></script>
-<script src="js/templates.js?v=32"></script>
-<script src="js/datasheet.js?v=32"></script>
-<script src="js/area.js?v=32"></script>
-<script src="js/gridfiles.js?v=32"></script>
-<script src="js/grid.js?v=32"></script>
+<script src="data/layers.js?v=36"></script>
+<script src="data/stations.js?v=36"></script>
+<script src="js/util.js?v=36"></script>
+<script src="js/units.js?v=36"></script>
+<script src="js/export.js?v=36"></script>
+<script src="js/soil.js?v=36"></script>
+<script src="js/wind.js?v=36"></script>
+<script src="js/charts.js?v=36"></script>
+<script src="js/practices.js?v=36"></script>
+<script src="js/methods.js?v=36"></script>
+<script src="js/app.js?v=36"></script>
+<script src="js/downloads.js?v=36"></script>
+<script src="js/models.js?v=36"></script>
+<script src="js/writers.js?v=36"></script>
+<script src="js/century.js?v=36"></script>
+<script src="js/preview.js?v=36"></script>
+<script src="js/templates.js?v=36"></script>
+<script src="js/datasheet.js?v=36"></script>
+<script src="js/area.js?v=36"></script>
+<script src="js/gridfiles.js?v=36"></script>
+<script src="js/grid.js?v=36"></script>
 </body>
 </html>

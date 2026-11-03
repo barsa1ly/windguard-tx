@@ -503,10 +503,18 @@
     $("#soilDerived").innerHTML = "";
     $$("#soilEdit input").forEach(i => { i.value = ""; i.classList.remove("edited"); });
     $("#resetSoilBtn").hidden = true;
-    $("#windIdx").innerHTML = "";
-    $("#roseBox").innerHTML = "";
+    clearWind();
     $("#planBox").innerHTML = "";
     renderPractices();
+  }
+
+  /* The Wind tab while a series loads: nothing of the last site or period stays on the page or in its downloads. */
+  const WIND_CHARTS = ["chSeason", "chSpeed", "chWater", "chTrend", "chCal"];
+  function clearWind() {
+    $("#windSrcTag").textContent = "loading…";
+    ["#moistTag", "#roseBox", "#roseNote", "#trendTag", "#trendNote", "#calKv", "#windIdx", "#windSource"].forEach(s => { $(s).textContent = ""; });
+    $("#calCard").hidden = true;
+    Ch.clear(WIND_CHARTS);
   }
 
   async function analyzeSite(tok) {
@@ -897,7 +905,9 @@
     $("#thrVal").textContent = thrTxt(state.thr);
     const sets = state.windSets || {};
     if (sets.model) { // the selectors follow the series loaded, also when the one shown has too little data
+      const was = shownModel();
       $("#modelSel").value = sets.model.model || state.gridModel;
+      if (shownModel() !== was) syncPeriodUI(!$("#periodCustom").hidden); // the other model answered: the date limits follow
       const sel = $("#srcSel");
       [...sel.options].forEach(o => { o.disabled = !sets[o.value]; });
       sel.value = state.windKey;
@@ -958,7 +968,7 @@
     $("#trendNote").textContent = "";
     $("#calCard").hidden = true;
     $("#windSource").textContent = why;
-    Ch.clear();
+    Ch.clear(WIND_CHARTS);
   }
 
   /* ---- provenance: what supplied each piece of data for this site ---- */
@@ -1048,6 +1058,7 @@
     const card = $("#calCard");
     const c = state.windCompare, st = state.windStation, all = state.windAll || {};
     const tw = state.windTower;
+    card.classList.toggle("waiting", !st || !c); // only the message below: the stations, chart and table come with the comparison
     if (!st || !c) {
       card.hidden = !state.windStationPending && !tw;
       $("#calKv").innerHTML = `<span class="k">${tw && !state.windStationPending ? `Reading the ${esc(tw.id)} mesonet tower…` : "Looking for the nearest airport station…"}</span><span class="v"></span>`;
@@ -1138,22 +1149,24 @@
     return "";
   }
   const movedTxt = (P, m) => `The days outside the ${recordTxt(m)} were left out: ${P.label}.`;
+  // dates are checked against the model the select shows: after a fallback that is the one that answered, not state.gridModel
+  const shownModel = () => $("#modelSel").value;
   function syncPeriodUI(choosing = false) { // choosing: "Custom dates…" picked, dates not applied yet
-    const L = Wd.limits(state.gridModel), custom = !!state.period.from || choosing;
+    const m = shownModel(), L = Wd.limits(m), custom = !!state.period.from || choosing;
     $("#periodSel").value = custom ? "custom" : String(state.period.n);
     $("#periodCustom").hidden = !custom;
     ["#periodFrom", "#periodTo"].forEach(s => { $(s).min = Wd.isoDay(L.first); $(s).max = Wd.isoDay(L.last); });
     // applied custom dates are shown; otherwise the inputs keep what was typed, and empty ones start at the preset's dates
-    const P = state.period.from ? state.period : Wd.resolvePeriod(state.period, state.gridModel);
+    const P = state.period.from ? state.period : Wd.resolvePeriod(state.period, m);
     if (state.period.from || !$("#periodFrom").value) $("#periodFrom").value = P.from;
     if (state.period.from || !$("#periodTo").value) $("#periodTo").value = P.to;
-    $("#periodLimits").textContent = `${state.gridModel === "ecmwf" ? "ECMWF" : "NASA MERRA-2"}: ${Wd.dayLabel(L.first)} – ${Wd.dayLabel(L.last)}`;
+    $("#periodLimits").textContent = `${m === "ecmwf" ? "ECMWF" : "NASA MERRA-2"}: ${Wd.dayLabel(L.first)} – ${Wd.dayLabel(L.last)}`;
   }
   function reloadWind() {
     if (!state.site) return;
     // the old period's series go: nothing re-analyses them or labels them with the new period while it loads
     Object.assign(state, { wind: null, windRaw: null, windSets: null, windAll: null, windCompare: null, windStation: null, windAirport: null, windTower: null, windSkipped: [] });
-    $("#windSrcTag").textContent = "loading…";
+    clearWind();
     const { lat, lon } = state.site;
     try { history.replaceState(null, "", `?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}${windQ()}${UN.query()}${KEEP_Q}`); } catch (e) { /* file:// */ }
     loadWind(state.token);
@@ -1166,12 +1179,13 @@
     reloadWind();
   });
   $("#periodApply").addEventListener("click", () => {
-    const a = $("#periodFrom").value, b = $("#periodTo").value, m = state.gridModel, alt = otherModel(m);
+    const a = $("#periodFrom").value, b = $("#periodTo").value, m = shownModel(), alt = otherModel(m);
     if (!a || !b) return U.toast("Choose a start and an end date.");
     const p = { from: a, to: b }, why = periodIssue(p, m);
     if (why) return U.toast(why + (periodIssue(p, alt) ? "" : ` The ${recordTxt(alt)} holds them.`), 8000);
     const P = Wd.resolvePeriod(p, m);
     if (P.moved) U.toast(movedTxt(P, m), 5000);
+    state.gridModel = m; // the model they were checked against is the one to read them with
     state.period = { from: P.from, to: P.to }; // the dates analysed, which the inputs and the address then show
     syncPeriodUI();
     reloadWind();
@@ -1181,7 +1195,7 @@
     if (state.period.from) { // custom dates: the new model must hold them
       const P = Wd.resolvePeriod(state.period, m), why = periodIssue(state.period, m);
       if (why) {
-        e.target.value = state.windSets ? state.windSets.model.model : state.gridModel;
+        e.target.value = otherModel(m); // what it showed: two models, and a change event means it held the other
         return U.toast(`${MODEL[m].short} not chosen. ${why}`, 8000);
       }
       if (P.moved) { U.toast(movedTxt(P, m), 5000); state.period = { from: P.from, to: P.to }; }
@@ -1254,7 +1268,7 @@
     $("#soilSrcTag").textContent = `SSURGO · ${s.mapunit.areasymbol || ""}`;
     renderWegTable(surf);
     const e = state.elev;
-    $("#soilSource").innerHTML = `Source: USDA-NRCS Soil Survey Geographic Database (SSURGO) via <a href="https://sdmdataaccess.nrcs.usda.gov/" target="_blank" rel="noopener">Soil Data Access</a>, map unit key ${s.mukey}, ${esc(s.mapunit.areaname || "")}${s.mapunit.saverest ? `, survey dated ${esc(String(s.mapunit.saverest).slice(0, 10))}` : ""}. Elevation/slope: ${e ? esc(e.src) + (e.src.startsWith("USGS") ? " (Elevation Point Query Service)" : " via Open-Meteo") : "loading"}. Water retention for edited layers: Saxton &amp; Rawls (2006). <button class="link" data-methods="m-erod">Equations →</button>`;
+    $("#soilSource").innerHTML = `Source: USDA-NRCS Soil Survey Geographic Database (SSURGO) via <a href="https://sdmdataaccess.nrcs.usda.gov/" target="_blank" rel="noopener">Soil Data Access</a>, map unit key ${s.mukey}, ${esc(s.mapunit.areaname || "")}${s.mapunit.saverest ? `, survey dated ${esc(String(s.mapunit.saverest).split(/[ T]/)[0])}` : ""}. Elevation/slope: ${e ? esc(e.src) + (e.src.startsWith("USGS") ? " (Elevation Point Query Service)" : " via Open-Meteo") : "loading"}. Water retention for edited layers: Saxton &amp; Rawls (2006). <button class="link" data-methods="m-erod">Equations →</button>`;
     renderDerived();
   }
 
