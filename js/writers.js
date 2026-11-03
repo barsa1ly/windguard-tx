@@ -689,6 +689,7 @@
       return swatLayers(soil).L.map(l => { const v = lay(l); return { top: l.top, bot: l.bot, hz: l.hz, bd: v[1], awc: v[2], ksat: v[3], oc: v[4], clay: v[5], silt: v[6], sand: v[7], cfWt: v[8], ec: v[11], caco3: v[12], ph: v[13] }; });
     }
     if (model === "century") return WG.writerUtil.centuryLayers(soil);
+    if (model === "daycent") return WG.writerUtil.daycentLayers(soil);
     return soil.layers;
   }
   // what a file holds where the soil has no organic matter, for its README

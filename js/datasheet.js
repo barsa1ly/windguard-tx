@@ -23,6 +23,7 @@ WG.datasheet = (function () {
     ["apsim", "APSIM", "Weather .met, with CO₂", "Soil .apsimx"],
     ["aquacrop", "AquaCrop 7", "Climate .CLI with temperature, rain and ET₀ files, and an AquaCrop-OSPy file", "Soil .SOL"],
     ["century", "CENTURY 4.0 and 4.5", "Monthly weather .wth", "Site file .100 for each version, which also holds climate lines"],
+    ["daycent", "DayCent (Dec 2016)", "Daily weather .wth", "Site file .100 with climate lines, soils.in and sitepar.in"],
     ["csv", "Plain CSV", "Daily weather with units, for any model", "Soil layers with units, for any model"],
   ];
   // [key, name, the tabs that have it]
@@ -64,7 +65,7 @@ WG.datasheet = (function () {
     let soil, L;
     try { soil = chosenSoil(); L = soil ? usableRows(soil) : []; } catch (e) { box.textContent = e.message; return; }
     const told = (soil && soil.notes ? soil.notes : []).filter(n => !(userSoilRows && userSoilRows.notes && userSoilRows.notes.includes(n))).join(" "); // the editor shows its file's notes
-    if (mode === "model") { box.textContent = `DSSAT splits the horizons at 5, 15, 30, 45, 60, 90 … cm and APSIM uses 15, 15, 30, 30 … cm layers; AquaCrop merges them to 5, APEX to 10 and EPIC to 15; CENTURY averages them on its 15, 15, 15, 15, 30, 30, 30, 30 cm; SWAT+ and the tables keep the horizons.${told ? ` ${told}` : ""}`; return; }
+    if (mode === "model") { box.textContent = `DSSAT splits the horizons at 5, 15, 30, 45, 60, 90 … cm and APSIM uses 15, 15, 30, 30 … cm layers; AquaCrop merges them to 5, APEX to 10 and EPIC to 15; CENTURY averages them on its 15, 15, 15, 15, 30, 30, 30, 30 cm and DayCent on NREL's rows of 2, 3, 5, 10, 10, 15 … cm; SWAT+ and the tables keep the horizons.${told ? ` ${told}` : ""}`; return; }
     if (!L.length) { box.textContent = `No layers to write.${told ? ` ${told}` : ""}`; return; }
     const z = depthOf, u = UN.sym("depth"), rl = soil.relayer;
     box.textContent = `${L.length} layer${L.length > 1 ? "s" : ""} (${u}): ${L.map(l => `${z(l.top)}–${z(l.bot)}`).join(", ")}.`
@@ -128,15 +129,16 @@ WG.datasheet = (function () {
     const h = Math.sin((b.lat - a.lat) * r / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin((b.lon - a.lon) * r / 2) ** 2, km = 12742 * Math.asin(Math.sqrt(h));
     return `${userWxSrc.name} was loaded at ${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}, ${UN.fmt("distance", km, km < 10 ? 1 : 0)} from this location: its weather is written under this location's name and coordinates.`;
   }
-  /* CENTURY's site file holds climate lines as well as the soil: in the soil tab, where they come from (as prepare reads
-     them: a file has no 10 years to give, so gridMET) and what Both together does instead */
+  /* CENTURY's and DayCent's site files hold climate lines as well as the soil: in the soil tab, where they come from (as
+     prepare reads them: a file has no 10 years to give, so gridMET) and what Both together does instead */
+  const CLIM_MODELS = ["century", "daycent"];
   function climNote() {
-    const box = $("#dlClimNote"), on = tab === "soil" && !!$("input[name=dlModel][value=century]:checked");
+    const box = $("#dlClimNote"), who = CLIM_MODELS.filter(m => $(`input[name=dlModel][value=${m}]:checked`)).map(m => MODEL_NAME[m].split(" ")[0]), on = tab === "soil" && who.length > 0;
     if (!box) return;
     box.hidden = !on;
     if (!on) return;
     const v = $("#dlWx").value, src = { power: "NASA POWER", prism: "PRISM" }[v] || "gridMET";
-    box.textContent = `CENTURY's site file also holds climate lines: here they come from the last 10 complete years of ${src}, ${v === "file" ? "as your weather file is not used for them" : "the source chosen under Weather files"}. Both together takes them from the chosen dates instead when every month has 10 years in them, else from the same 10 years.`;
+    box.textContent = `${who.length > 1 ? "CENTURY's and DayCent's site files also hold" : `${who[0]}'s site file also holds`} climate lines: here they come from the last 10 complete years of ${src}, ${v === "file" ? "as your weather file is not used for them" : "the source chosen under Weather files"}. Both together takes them from the chosen dates instead when every month has 10 years in them, else from the same 10 years.`;
   }
   /* the date inputs take the chosen source's range; Download moves dates outside it inside and says so */
   function dateLimits() {
@@ -695,14 +697,14 @@ WG.datasheet = (function () {
     const U = WG.writerUtil, by = list => (wx ? models.filter(m => list.includes(m)).map(m => MODEL_NAME[m]) : []);
     const tavBy = by(["dssat", "apsim"]), genBy = by(["epic", "apex", "swatplus"]);
     const tav = tavBy.length > 0 && !U.tavAmp(wx, false), gaps = genBy.length ? U.statGaps(wx) : [];
-    // CENTURY's site file holds climate lines, from 10 years a month: the chosen dates if they have them
-    const centBy = soil && !soilWhy && !modelSoilWhy && models.includes("century") && U.centuryNeedsClimate(wx) ? [MODEL_NAME.century] : [];
+    // CENTURY's and DayCent's site files hold climate lines, from 10 years a month: the chosen dates if they have them
+    const centBy = soil && !soilWhy && !modelSoilWhy && U.centuryNeedsClimate(wx) ? models.filter(m => CLIM_MODELS.includes(m)).map(m => MODEL_NAME[m]) : [];
     let climWx = null, climError = null, clim = null;
     if (tav || gaps.length || centBy.length) {
       const cs = src === "power" || src === "prism" ? src : "gridmet", per = new Array(12).fill(0);
       if (wx) wx.days.forEach(d => per[new Date(d * 864e5).getUTCMonth()]++);
       const short = !!wx && per.some(x => x < 20), genWhat = gaps.length ? `the weather-generator statistics${short ? "" : ` of ${and(gaps)}`}` : ""; // short: every group lacks those months
-      clim = { src: { power: "NASA POWER", prism: "PRISM", gridmet: "gridMET" }[cs], tav, gaps, tavBy, genBy, centBy, genWhat, what: and([tav && "TAV and AMP", genWhat, centBy.length && "CENTURY's climate lines"].filter(Boolean)),
+      clim = { src: { power: "NASA POWER", prism: "PRISM", gridmet: "gridMET" }[cs], tav, gaps, tavBy, genBy, centBy, genWhat, what: and([tav && "TAV and AMP", genWhat, centBy.length && `${and(centBy.map(shortName))}'s climate lines`].filter(Boolean)),
         why: !wx ? "this download has no weather to work them out from" : short ? "the chosen dates do not cover every month" : tav || gaps.length ? `the weather has fewer than 20 days of ${and(gaps.length ? gaps : ["Tmax and Tmin"])} in some months` : "the chosen dates have fewer than 10 years in some month" };
       status(`${cap(clim.why)}: reading 10 complete years of ${clim.src} for ${clim.what}…`);
       try {
@@ -779,6 +781,7 @@ WG.datasheet = (function () {
   }
   const and = a => (a.length > 1 ? `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}` : a[0]);
   const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const shortName = n => n.split(" ")[0]; // "CENTURY 4.0 and 4.5" -> "CENTURY", as in the sentences that name it
 
   /* one table, or a note saying why it is missing */
   function tableFile(k, ctx, failed) {
@@ -897,12 +900,12 @@ WG.datasheet = (function () {
       L.push(windText(w, o), "");
     }
     // why 10 complete years were read, for which models' statistics, and what they did when the read failed
-    if (c && ctx.climWx) L.push(`Climate statistics: ${and([c.tav && `TAV and AMP (${and(c.tavBy)})`, c.gaps.length && `${c.genWhat} (${and(c.genBy)})`, c.centBy.length && "the climate lines of CENTURY's site file"].filter(Boolean))} come from 10 complete years of ${c.src}, `
+    if (c && ctx.climWx) L.push(`Climate statistics: ${and([c.tav && `TAV and AMP (${and(c.tavBy)})`, c.gaps.length && `${c.genWhat} (${and(c.genBy)})`, c.centBy.length && `the climate lines of ${and(c.centBy.map(shortName))}'s site file${c.centBy.length > 1 ? "s" : ""}`].filter(Boolean))} come from 10 complete years of ${c.src}, `
       + `${Wd.isoDay(ctx.climWx.days[0])} to ${Wd.isoDay(ctx.climWx.days[ctx.climWx.days.length - 1])}, because ${c.why}. Each model folder's README says which of its statistics use them.${w && w.source === ctx.climWx.source ? "" : ` ${climCredit(ctx.climWx)}`}`, "");
     else if (c && o.climError) L.push(`Climate statistics: ${c.why}, and reading 10 complete years of ${c.src} for ${c.what} failed (${o.climError}).`
       + (c.tav ? ` ${and(c.tavBy)} ${c.tavBy.length > 1 ? "take" : "takes"} TAV and AMP from the months the dates have instead, marked approximate.` : "")
       + (c.gaps.length ? ` For ${and(c.genBy)}, the folder's README says where the generator statistics came from, or a NOT_WRITTEN.txt in its place says why the files could not be made.` : "")
-      + (c.centBy.length ? " CENTURY's README says where its site file's climate lines came from, or why that file could not be made." : ""), "");
+      + (c.centBy.length ? ` ${c.centBy.length > 1 ? "The CENTURY and DayCent READMEs say where their site files'" : `${shortName(c.centBy[0])}'s README says where its site file's`} climate lines came from, or why ${c.centBy.length > 1 ? "a site file" : "that file"} could not be made.` : ""), "");
     if (s) L.push(...soilText(s, o), ...(s.notes || []).map(n => `  ${n}`), "");
     else if (ctx.soilWhy) L.push(`Soil: none in these files. ${ctx.soilWhy}`, "");
     const made = what => !o.failed.some(f => f.what === what);

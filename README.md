@@ -42,6 +42,7 @@ The data sheet builds a zip for the chosen location. Its tabs give the weather f
 | APSIM Next Gen / 7.10 | weather `.met` with a CO₂ column, soil `.apsimx` |
 | AquaCrop 7 | climate `.CLI` with `.Tnx`, `.ETo` and `.PLU`, soil `.SOL`, and an AquaCrop-OSPy weather file |
 | CENTURY 4.0, 4.5 | monthly weather `.wth`; a site file `.100` for each version, with the soil, its water layers and climate lines. The schedule and event files are yours. Written from the model's Fortran readers and not run in CENTURY here |
+| DayCent (Dec 2016) | daily weather `.wth` (with solar radiation, humidity and wind when every day has them); a site file `.100` with climate lines; `soils.in` on NREL's layers, at most 20 rows and 9 CENTURY layers; `sitepar.in`. The schedule, `fix.100` and event files are yours. Written from the model's readers, checked against NREL's example runs, and not run in DayCent here |
 | Plain CSV | daily weather and soil layers with units, and a README (ET₀ source, layers) |
 
 - **Templates for your own files:** the sheet shows the layout a weather or soil file should have. Tick the columns you have, choose each one's unit (°C, °F or K; mm, inches or cm; MJ, W/m², kWh, langley or kJ; m/s, mph, km/h or knots; soil depths in cm, inches, mm, m or feet; g/kg or %; Ksat in eight units; and so on) and download a CSV or Excel template. Its column names state the units, such as `tmax (F)` or `wind at 3 m (mph)`, so the filled-in file loads with nothing else to set.

@@ -208,8 +208,10 @@
     const tcg = 1000 * (-0.827 * T + 0.0224 * T * T + 0.127 * P - 0.000938 * P * P + 0.0899 * P * info.silt + 0.06 * P * info.clay + 4.09);
     return tcg < 500 ? { ivauto: 0, b: 500, split: [0.03, 0.44, 0.53], how: "floor", tcg } : { ivauto: 1, b: tcg, split: [0.02, 0.64, 0.34], how: "burke", tcg };
   }
+  /* version "4.0", "4.5" or "DC" (DayCent of December 2016, js/daycent.js): DayCent's reader takes 4.5's lines with a
+     surface and a soil slow pool, SOM2CI(1,*) and SOM2CI(2,*), and their RCES2 ratios, 245 lines in all (sitein.f) */
   function siteText(soil, site, info, c, version) {
-    const v45 = version === "4.5", start = startOf(info, c), [a1, a2, a3] = start.split.map(x => x * start.b), L = [];
+    const dc = version === "DC", v45 = version === "4.5" || dc, start = startOf(info, c), [a1, a2, a3] = start.split.map(x => x * start.b), L = [];
     const line = (v, label) => { if (!ok(v)) throw new Error(`CENTURY: no value for ${label}.`); L.push(siteLine(v, label)); };
     const twelve = (name, arr) => arr.forEach((v, m) => line(v, `${name}(${m + 1})`));
     const list = (name, arr, one = true) => arr.forEach((v, i) => line(v, one ? `${name}(${i + 1})` : name));
@@ -222,7 +224,8 @@
     line(start.ivauto, "IVAUTO"); line(1, "NELEM"); line(site.lat, "SITLAT"); line(site.lon, "SITLNG");
     line(info.sand, "SAND"); line(info.silt, "SILT"); line(info.clay, "CLAY");
     if (v45) line(info.rock, "ROCK");
-    line(info.bd, "BULKD"); line(info.nlayer, "NLAYER"); line(info.nlaypg, "NLAYPG"); line(info.drain === null ? 1 : info.drain, "DRAIN"); line(0, "BASEF"); line(0, "STORMF");
+    line(info.bd, "BULKD"); line(info.nlayer, "NLAYER"); line(info.nlaypg, "NLAYPG"); line(info.drain === null ? 1 : info.drain, "DRAIN");
+    line(dc ? 0.3 : 0, "BASEF"); line(0, "STORMF"); // DayCent: BASEF of NREL's Wooster run; STORMF 0, as NREL's DayCent instructions ask
     if (v45) { line(8, "PRECRO"); line(0.15, "FRACRO"); }
     line(0, "SWFLAG"); // the only setting that carries the horizons' values: the others apply one texture to every layer
     const deepest = info.layers[info.layers.length - 1], at = (k, i) => (info.layers[i] || deepest)[k]; // past NLAYER: unused, and repeated so that raising NLAYER cannot divide by zero
@@ -235,9 +238,14 @@
     line(0, "SATMOS(1)"); line(0, "SATMOS(2)"); line(0, "SIRRI");
     L.push("*** Organic matter initial values");
     line(10, "SOM1CI(1,1)"); line(0, "SOM1CI(1,2)"); line(a1, "SOM1CI(2,1)"); line(0, "SOM1CI(2,2)");
-    line(a2, "SOM2CI(1)"); line(0, "SOM2CI(2)"); line(a3, "SOM3CI(1)"); line(0, "SOM3CI(2)");
+    // DayCent's surface slow pool starts empty, as its own Burke start leaves it (calciv.f)
+    if (dc) { line(0, "SOM2CI(1,1)"); line(0, "SOM2CI(1,2)"); line(a2, "SOM2CI(2,1)"); line(0, "SOM2CI(2,2)"); }
+    else { line(a2, "SOM2CI(1)"); line(0, "SOM2CI(2)"); }
+    line(a3, "SOM3CI(1)"); line(0, "SOM3CI(2)");
     line(16, "RCES1(1,1)"); line(50, "RCES1(1,2)"); line(50, "RCES1(1,3)"); line(12, "RCES1(2,1)"); line(50, "RCES1(2,2)"); line(50, "RCES1(2,3)");
-    list("RCES2", [17, 117, 117]); list("RCES3", [8, 62, 62]);
+    if (dc) [1, 2].forEach(p => [17, 117, 117].forEach((v, e) => line(v, `RCES2(${p},${e + 1})`)));
+    else list("RCES2", [17, 117, 117]);
+    list("RCES3", [8, 62, 62]);
     line(100, "CLITTR(1,1)"); line(0, "CLITTR(1,2)"); line(100, "CLITTR(2,1)"); line(0, "CLITTR(2,2)"); // the model divides by these
     line(66, "RCELIT(1,1)"); line(300, "RCELIT(1,2)"); line(300, "RCELIT(1,3)"); line(66, "RCELIT(2,1)"); line(300, "RCELIT(2,2)"); line(300, "RCELIT(2,3)");
     zeros("AGLCIS", 2); zeros("AGLIVE", 3); list("BGLCIS", [150, 0]); list("BGLIVE", [3, 0.4, 0.4]); list("STDCIS", [50, 0]); list("STDEDE", [0.8, 0.2, 0.2]);
@@ -250,7 +258,7 @@
     L.push("*** Water initial parameters");
     zeros("RWCF", 10); line(0, "SNLQ"); line(0, "SNOW");
     // the reader names and counts lines, and stops at the first it does not expect: it never gets to see a wrong file
-    if (L.length !== 240) throw new Error(`CENTURY: the ${version} site file has ${L.length} lines, not 240.`);
+    if (L.length !== (dc ? 245 : 240)) throw new Error(`CENTURY: the ${version} site file has ${L.length} lines, not ${dc ? 245 : 240}.`);
     return { text: L.join(CRLF) + CRLF, start };
   }
 
@@ -348,4 +356,6 @@
     });
   };
   U.centuryNeedsClimate = needsClimate;
+  // what DayCent's writer shares: the months and climate lines, the soil reading and the site file
+  U.century = { MISSING, MIN_DAYS, num, cm, hzOf, monthlyOf, pickClimate, srcName, badOf, profileOf, soilInfo, depthText, startOf, siteText };
 })();
