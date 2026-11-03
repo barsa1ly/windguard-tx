@@ -810,10 +810,18 @@ WG.models = (function () {
     // the next tip), dated from the first of them }; cuts: the days of falls of more than a tenth that are no dips (a weighing
     // gauge's total wavers by less)
     const falls = [], cuts = [], rowAt = new Set(days.flatMap((e, j) => e.list.map(r => (r.t === null ? null : dayKeys[j] * 1440 + r.t))));
+    /* a name that marks a season's total: accumulated, cumulative, or since a date ("since Oct 1", "since 1 Oct", "since
+       10/1", "since 2024-10-01"), and no day, hour or other span, and no time of day ("since 7 AM", "since midnight", "Rain
+       Today", "since 0700", 12Z, UTC). Season, year and YTD are no rain at all (WX_NOT) */
+    const pn = (C.prcp >= 0 ? head[C.prcp] : "").toLowerCase().replace(/_/g, " "), MON = "(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?)\\b";
+    const onDate = pn.match(new RegExp(`since\\W*(${MON}|\\d{1,2}(st|nd|rd|th)?\\W*${MON}|\\d{1,2}[/-]\\d{1,2}([/-]\\d{2,4})?\\b|\\d{4}-\\d{1,2}(-\\d{1,2})?)`));
+    const seasonName = (/accum|cumul/.test(pn) || !!onDate) && (!!onDate || !/since\W*\d/.test(pn)) && !/(^|\D)24(\D|$)/.test(onDate ? pn.replace(onDate[0], " ") : pn)
+      && !/day|daily|midnight|hour|\bhrs?\b|minute|\bmins?\b|\d\s*(hrs?|mins?|h|z)\b|\d\s*[ap]\.?m\b|\d:\d\d|\b(utc|gmt|lst|local)\b/.test(pn)
+      && !/since\W*(last|prev|previous)\b|\b(noon|sunrise|sunset|hrly)\b|\bpt?\d+[hmd]\b|(^|\W)\d+\s*[dm]\b|(^|\D)\d{1,2}:?\d{2}\s*-\s*\d{1,2}:?\d{2}(\D|$)|(^|\D)\d{1,2}\s*-\s*\d{1,2}(\D|$)/.test(onDate ? pn.replace(onDate[0], " ") : pn);
     // a dip: a fall to no less than half that is back to the reading before it within three readings (or ends the file), as a
     // gauge's total wavers, unless the name says the total is a day's ("since 7 AM", "Rain Today": it falls only to a reset)
     const comes = (a, i, v) => { const b = a.slice(i + 1, i + 4); return !b.length || b.some(x => x >= v); };
-    if (sub && !/day|daily|today|midnight|since \d/i.test(C.prcp >= 0 ? head[C.prcp] : "")) {
+    if (sub && (seasonName || !/day|daily|today|midnight|since \d/i.test(C.prcp >= 0 ? head[C.prcp] : ""))) {
       const seq = days.flatMap(e => e.list.filter(r => r.prcp !== null)), pv = seq.map(r => r.prcp);
       seq.forEach((r, i) => { if (i && pv[i] < pv[i - 1] && 2 * pv[i] >= pv[i - 1] && comes(pv, i, pv[i - 1])) for (let k = i; k < seq.length && pv[k] < pv[i - 1]; k++) seq[k].dip = true; });
     }
@@ -844,6 +852,132 @@ WG.models = (function () {
     const blank = e => e.list.every(r => r.prcp === null), blankDays = days.filter(blank).length;
     const varies = k => new Set(days.flatMap(e => e.list.map(r => r[k]).filter(v => v !== null))).size > 1;
     const yearly = D => D.every((d, i) => !i || d - D[i - 1] >= 300);
+    const spread = T => { const s = T.map(t => t % 1440).sort((a, b) => a - b); return 1440 - s.reduce((g, t, i) => Math.max(g, i ? t - s[i - 1] : t + 1440 - s[s.length - 1]), 0); };
+    /* a season's name decides on rows through the day where the rows allow it: in time order they fall a year apart at
+       least, and a year after the total's start where it starts from 0 in the file. A fall of a step or two of the column's
+       resolution, not to 0, that is back within three readings to no more than a step or two above (or is on the file's
+       last three rows, or on the last three before the blank rows that end it, on the row after the reading before it), is
+       a gauge's wavering, no fall. Where 0s outnumber blanks, the readings above 0 never repeat the
+       one before (a total given only when it changes) and they open more than ten times above any rise between them (a
+       total from well before the file), a run of 0s between two readings that goes back up past the one before it is dry
+       hours written 0, no fall, and so then are the file's first and last 0s (all its 0s, where its readings above 0 make
+       one run and 0s follow it); dry hours are no falls for the rows either. The rows win where they fall once a day at one hour on two days or more (a running daily total, one reset
+       at 7 am or 00:00 UTC), where each day given is given from its first reading to its end, and one at least is left
+       blank from the day's start, or holds its value while whole days are blank (a running daily total left blank before
+       each day's first tip), or where a value held on rows in a row is then left blank (below); a reading missing (below)
+       counts as given in both, but turns the first test on by itself only where the rows can then be read so (below). With
+       no reading above 0 there is nothing to read by the name. */
+    // dry hours written 0: more 0s than blanks (and see `repeated`, below)
+    const zeroDry = days.reduce((n, e) => n + e.list.filter(r => r.prcp === 0).length - e.list.filter(r => r.prcp === null).length, 0) > 0;
+    let byName = false, cutN = [], stepN = Infinity, sparse = false, blank0 = false, gapF = new Map(), heldB = new Set();
+    if (sub && seasonName) {
+      const seq = days.flatMap((e, j) => e.list.filter(r => r.prcp !== null).map(r => ({ r, v: r.prcp, d: dayKeys[j] })));
+      sparse = !seq.some((x, i) => i && x.v > 0 && x.v === seq[i - 1].v);
+      const pos = seq.filter(x => x.v > 0), lift0 = pos.reduce((m, x, i) => (i && x.v - pos[i - 1].v > m ? x.v - pos[i - 1].v : m), 0);
+      if (zeroDry && lift0 > 0 && pos[0].v > 10 * lift0 && !seq.some((x, i) => i && x.v > 0 && x.v === seq[i - 1].v)) {
+        let back = false, between = false;
+        for (let i = 0, k; i < seq.length; i = k) {
+          k = i + 1;
+          if (seq[i].v) continue;
+          while (k < seq.length && !seq[k].v) k++;
+          if (!i || k === seq.length) continue;
+          between = true;
+          if (seq[k].v > seq[i - 1].v) { back = true; for (let m = i; m < k; m++) seq[m].r.dry0 = true; }
+        }
+        const p0 = seq.findIndex(x => x.v), p1 = seq.length - 1 - seq.slice().reverse().findIndex(x => x.v);
+        if (p0 >= 0 && (back || !between && p1 < seq.length - 1)) seq.forEach((x, i) => { if (i < p0 || i > p1) x.r.dry0 = true; });
+      }
+      const E = seq.filter(x => !x.r.dry0);
+      const ownN = UN.prcp.u === "in" ? 25.4 : UN.prcp.u === "cm" ? 10 : 1;
+      stepN = ownN * ([1, 0.1, 0.01].find(s => seq.every(x => Math.abs(x.v / ownN / s - Math.round(x.v / ownN / s)) < 1e-6)) || 0.001);
+      const allR = days.flatMap(e => e.list), endA = allR.map(r => r.prcp !== null).lastIndexOf(true), rowN = new Map(allR.map((r, i) => [r, i]));
+      const tail = days[days.length - 1].list.slice(-3), tailE = endA >= 0 && endA + 1 < allR.length ? allR.slice(Math.max(0, endA - 2), endA + 1) : [];
+      const atEndW = i => E.slice(i).every(y => tail.includes(y.r)) || E.slice(i).every(y => tailE.includes(y.r)) && rowN.get(E[i].r) - rowN.get(E[i - 1].r) === 1;
+      E.forEach((x, i) => {
+        const b = i ? E[i - 1].v : null, s = 2 * stepN + 1e-9;
+        if (b === null || !(x.v < b && x.v > 0 && b - x.v <= s) || x.r.waver) return;
+        const k = E.findIndex((y, m) => m > i && m <= i + 3 && y.v >= b);
+        if (k < 0 ? !atEndW(i) : E[k].v > b + s) return; // (not back, but on the file's last rows: before the blank rows that end it, on the row after the reading before)
+        for (let m = i; m < (k < 0 ? E.length : k); m++) E[m].r.waver = true;
+      });
+      const fall = (b, x) => x.v < b && !x.r.waver;
+      const down = E.filter((x, i) => i && fall(E[i - 1].v, x)), D = down.map(x => x.d); // (dry hours written 0 are no falls)
+      const daily = down.length > 1 && !yearly(D) && new Set(D).size === D.length && down.every(x => x.r.t !== null) && spread(down.map(x => x.r.t)) <= 60;
+      /* a reading missing: blank rows between two readings of the same value above 0 (an hour's rows at most, or two rows
+         an hour or more apart), or between a reading and a higher one (an hour's rows at most, where the column also holds
+         a value on rows in a row somewhere: not one given only when it changes), in a column given on rows in a row for half
+         its readings at least (not one given every few hours), where no reset seen in the file comes at a time of day within
+         them (a fall to under half or by more than two steps, after blank rows or not; the blank rows that end the file).
+         A total left blank while it is 0 is blank only where it would read 0, after its reset and before the next tip, so it
+         does not come back from blank rows to the value it held, nor rise through them, but at its reset's hour. Where the
+         file holds one value only, its blank rows tell nothing of that and stay blank. A reading missing counts as given (and a
+         value held across one counts as held on rows in a row). Blank rows of less than a day between two readings of the same
+         value above 0, longer or not, where no reset seen comes at a time of day within them and no higher reading follows
+         within the hour (the first tips after a reset), are a value held through an outage too: no total left blank while 0 */
+      const rowsT = days.flatMap(e => e.list), runs = [];
+      for (let i = 0, k; i < rowsT.length; i = k) {
+        k = i + 1;
+        if (rowsT[i].prcp !== null) continue;
+        while (k < rowsT.length && rowsT[k].prcp === null) k++;
+        if (i && k < rowsT.length) runs.push([i, k, rowsT[i - 1].prcp, rowsT[k].prcp]);
+      }
+      const big = (a, b) => b < a && (2 * b <= a || b < a - 2 * stepN - 1e-9), endR = rowsT.map(r => r.prcp !== null).lastIndexOf(true);
+      const resetT = rowsT.flatMap((r, i) => (i && r.prcp !== null && rowsT[i - 1].prcp !== null && r.t !== null && big(rowsT[i - 1].prcp, r.prcp) ? [r.t] : []))
+        .concat(runs.filter(([i, k, a, b]) => big(a, b) && rowsT[i].t !== null).map(([i]) => rowsT[i].t), endR >= 0 && endR + 1 < rowsT.length && rowsT[endR + 1].t !== null ? [rowsT[endR + 1].t] : []);
+      const spans = (i, k) => { const tb = rowsT[i - 1].t, ta = rowsT[k].t; if (tb === null || ta === null) return true; const L = (ta - tb + 1440) % 1440 || 1440; return resetT.some(x => { const d = (x - tb + 2880) % 1440; return d > 0 && d <= L; }); };
+      const heldR = rowsT.some((r, i) => i && r.prcp > 0 && r.prcp === rowsT[i - 1].prcp);
+      const nbr = rowsT.filter((r, i) => r.prcp !== null && (i && rowsT[i - 1].prcp !== null || i + 1 < rowsT.length && rowsT[i + 1].prcp !== null)).length;
+      if (varies("prcp") && 2 * nbr >= rowsT.filter(r => r.prcp !== null).length) {
+        runs.forEach(([i, k, a, b]) => { if (a > 0 && b === a && (k - i) * stepT <= Math.max(60, 2 * stepT) && !spans(i, k)) for (let m = i; m < k; m++) gapF.set(rowsT[m], a); });
+        const heldF = heldR || gapF.size > 0;
+        runs.forEach(([i, k, a, b]) => { if (a > 0 && heldF && b > a && (k - i) * stepT <= 60 && !spans(i, k)) for (let m = i; m < k; m++) gapF.set(rowsT[m], a); });
+      }
+      runs.forEach(([i, k, a, b]) => { if (a > 0 && b === a && (k - i) * stepT < 1440 && !spans(i, k) && !rowsT.slice(k + 1, k + 1 + Math.max(1, Math.round(60 / stepT))).some(r => r.prcp > b)) for (let m = i; m < k; m++) heldB.add(rowsT[m]); });
+      const pf = r => (r.prcp === null && gapF.has(r) ? gapF.get(r) : r.prcp), gotF = e => e.list.flatMap((r, i) => (pf(r) === null ? [] : [i]));
+      const given = days.filter(e => e.got.length), held = e => e.got.some((x, i) => i && e.list[x].prcp === e.list[e.got[i - 1]].prcp);
+      // each day given is given from its first reading to its end, and one opens on blank rows or holds its value while
+      // whole days are blank. Readings missing count as given, but they turn this on by themselves only where the rows rise
+      // or fall within a day (to be read as a running total), no reading after blank rows across a midnight is at or above
+      // the one before them, more than a step (a running daily total would need as much rain in its first tips as in the
+      // whole day before: a season's total kept over an outage), and none after blank rows is more than ten times any rise
+      // from row to row and more than 75 mm an hour could bring since the row before (more than a running total's first
+      // tips: a season's total whose first rows were lost)
+      const toEndD = G => given.every(e => { const g = G(e); return g[g.length - 1] === e.list.length - 1 && g[g.length - 1] - g[0] === g.length - 1; }) && given.some(e => G(e)[0] > 0 || blankDays > 0 && held(e));
+      const liftF = rowsT.reduce((m, r, i) => { const v = pf(r), p = i ? pf(rowsT[i - 1]) : null; return v !== null && p !== null && v - p > m ? v - p : m; }, 0), dayOf = new Map();
+      days.forEach((e, j) => e.list.forEach(r => dayOf.set(r, j)));
+      let keptB = false, bigB = false;
+      rowsT.reduce((q, r, i) => {
+        const v = pf(r);
+        if (v === null) return q;
+        if (q >= 0 && i > q + 1 && pf(rowsT[q]) > stepN + 1e-9 && v >= pf(rowsT[q]) && dayOf.get(r) !== dayOf.get(rowsT[q])) keptB = true;
+        if (i && pf(rowsT[i - 1]) === null && v > 10 * liftF && v > 75 * Math.max(stepT, 1) / 60) bigB = true;
+        return i;
+      }, -1);
+      const tipped = toEndD(gotF) && (toEndD(e => e.got) || (drops > 0 || rises > 0) && !keptB && !bigB);
+      let st = null;
+      E.forEach((x, i) => { const b = i ? E[i - 1].v : null; if (b === null) return; if (fall(b, x)) cutN.push(x.d); else if (!b && x.v > 0 && st === null && !cutN.length) st = x.d; });
+      // a value held on rows in a row (each row given, while it holds) and then left blank: a running total left blank
+      // while it is 0 after its reset (a season's total is given on every row, or only when it changes, and does not go
+      // back to blank), where after the blank rows it goes on well below the value held (a reset seen: under half, or more
+      // than two steps), or where the file opens not far above its rises from row to row (ten times at most: a total from
+      // 0) and ends on blank rows or opens on them (an outage of a season's total is neither). A dip or a 0 ends a value held
+      // (a reset does not: the total held before it was a total). Blank rows then read as 0 (a reading missing, above, is no
+      // blank row), but not where dry hours are written 0 (a total left blank while it is 0 writes no 0s)
+      let liftA = 0, seenR = false, tailB = false, midB = false, hold = false;
+      rowsT.forEach((r, i) => {
+        const v = pf(r);
+        if (v === null) return;
+        const p = i ? pf(rowsT[i - 1]) : null;
+        if (p === null) hold = false;
+        else { if (v > p) liftA = Math.max(liftA, v - p); if (v < p && !big(p, v) || !v) hold = false; else if (v > 0 && v === p) hold = true; }
+        if (!hold || i + 1 >= rowsT.length || pf(rowsT[i + 1]) !== null) return;
+        if (i === endR) { tailB = true; return; }
+        midB = true;
+        if (big(v, pf(rowsT.slice(i + 2).find(x => pf(x) !== null)))) seenR = true;
+      });
+      blank0 = !tipped && !zeroDry && (seenR || liftA > 0 && pos[0].v <= 10 * liftA && (tailB || midB && rowsT[0].prcp === null));
+      byName = pos.length > 0 && !daily && !tipped && !blank0 && yearly(st === null ? cutN : [st, ...cutN]); // (no reading above 0: nothing to read so)
+    }
     /* each day's last reading (a daily file's value; the one value of a day repeated on its rows) as a season's total: it never
        falls but to a reset (a year apart at least) or by a weighing gauge's wavering now and then, is given on each day (rain
        left blank on dry days is amounts), and holds its value over dry days, twice at least. Equal amounts on two days in a row,
@@ -875,16 +1009,16 @@ WG.models = (function () {
     });
     const dryBlank = dayRain.filter(v => v === null).length, given = dayRain.length - dryBlank;
     if (!tops || wav > Math.max(1, given / 7)) dips += wav;
-    const totalName = C.prcp >= 0 && /accum|cumul|season|since|year|ytd/i.test(head[C.prcp]) && !/hour|hr\b|24|day|daily|midnight|today|\d\s*[ap]\.?m\b|\d:\d\d/i.test(head[C.prcp]);
+    const totalName = seasonName || C.prcp >= 0 && /accum|cumul|season|since|year|ytd/i.test(head[C.prcp]) && !/hour|hr\b|24|day|daily|midnight|today|\d\s*[ap]\.?m\b|\d:\d\d/i.test(head[C.prcp]); // ("since 2024-10-01" too)
     const season = C.prcp >= 0 && varies("prcp") && yearly(dayCuts) && 4 * dryBlank < given && (stays >= 2 && stays > 5 * (dayCuts.length + dips)
         && (totalName || stays >= 5 || least >= 3 * most || long >= 4 || long >= 3 && (rose >= 2 || plats >= 2) || !sub && plats >= 2 && rose > plats)
       || given >= 3 && (given >= 4 || stays) && !nil && !dayCuts.length && !dips && least >= 3 * most);
     // a daily value on each row: every wet day holds one value; for rain, on most of a day's rows for one at least (steady drizzle
     // through a few rows is amounts; a solar or ET value held through the day is that day's, however few rows give it), and not
-    // a season's total. Where dry hours are left blank, a blank on a wet day is a dry hour, so the value must fill all the day's
-    // rows (drizzle through most of a day is amounts); where they are written 0, a blank is a missing reading, as it is in any
-    // other column.
-    const zeroDry = days.reduce((n, e) => n + e.list.filter(r => r.prcp === 0).length - e.list.filter(r => r.prcp === null).length, 0) > 0;
+    // a season's total (by its rows, or by its name where a value is held over two days or the values stay three times
+    // above any rise from day to day and never fall). Where dry hours are left blank, a blank on a wet day is a dry hour,
+    // so the value must fill all the day's rows (drizzle through most of a day is amounts); where they are written 0 (zeroDry,
+    // above), a blank is a missing reading, as it is in any other column.
     // a running daily total starts each day from 0, so a day's first reading is one row's rain at most: days opening far above
     // any rise from row to row hold a total from before, three times above in a file given on half its rows each day (dry hours
     // too, as a total is), ten times where hours are left blank (as amounts may be); where whole days are blank (dry days, as a
@@ -902,7 +1036,7 @@ WG.models = (function () {
       const val = e => e.list.map(r => r[k]).filter(v => v !== null), over = k !== "prcp" && wet.some(e => val(e)[0] > (k === "et0" ? 0.8 : 1.5) || val(e).reduce((s, v) => s + v, 0) > (k === "et0" ? 15 : 50)
         || e.list.some(r => r[k] > 0 && r.t !== null && (r.t < 60 || r.t > 1380)));
       return wet.length > 0 && wet.every(e => { const a = val(e); return a.every(v => v === a[0]) && (k !== "prcp" ? over || 2 * a.length >= e.list.length : zeroDry || a.length === e.list.length); })
-        && (k !== "prcp" || wet.some(e => 2 * val(e).length >= usual) && !season && !(high && wet.every(e => val(e)[0] > 300)));
+        && (k !== "prcp" || wet.some(e => 2 * val(e).length >= usual) && !season && !(byName && (stays > 0 || least >= 3 * most && !dayCuts.length && !dips)) && !(high && wet.every(e => val(e)[0] > 300)));
     };
     const once = { prcp: repeated("prcp"), et0: repeated("et0"), srad: !POWER.has(UN.srad.u) && repeated("srad") };
     const says = /day|daily|accum|cumul|since/i.test(C.prcp >= 0 ? head[C.prcp] : "");
@@ -918,10 +1052,12 @@ WG.models = (function () {
     // two of a season's total, which a running daily total cannot be). Or never falling anywhere and kept over a midnight, on
     // days given through it on either side, where the name does not say daily: a running daily total would need as much rain
     // in the hour after midnight as the whole day before (a day or two of a season's total, or of a total reset at 7 am, has
-    // no more to show)
-    const accum = sub && !once.prcp && varies("prcp") && yearly(start === null ? cuts : [start, ...cuts]) && (carried >= 2 && carried > 2 * cuts.length && 2 * thru.filter(Boolean).length >= days.length && 4 * blankDays <= days.length
+    // no more to show). Or named as one, where the rows allow it (byName, above).
+    const byRows = varies("prcp") && yearly(start === null ? cuts : [start, ...cuts]) && (carried >= 2 && carried > 2 * cuts.length && 2 * thru.filter(Boolean).length >= days.length && 4 * blankDays <= days.length
       || kept >= 2 && !drops && !cuts.length && (days.every((e, j) => e.got.length > 1 || !j || j === days.length - 1) || start !== null
         || lift > 0 && floor > 3 * lift || days.some(e => e.got.length > 2) && !/day|daily|midnight/i.test(head[C.prcp])) || high && !drops && !cuts.length || carried > 0 && !falls.length && !/day|daily|today|midnight/i.test(head[C.prcp]));
+    const accum = sub && !once.prcp && (byRows || byName);
+    const blankR = sub && !once.prcp && !accum && blank0; // (above)
     const heldFlat = flat >= 10 && flat >= 3 * moved; // positive and unchanged through most rows: a total held between rains
     // a running daily total is given through its wet days, or to their end on their highest reading (blank before the day's
     // first tip, or out for a few hours), most of them, or only when it changes (no reading the same as the one before it, as
@@ -929,7 +1065,6 @@ WG.models = (function () {
     // day, their dry hours blank, stop when the rain does. On rows minutes apart, a day's last reading held three hours on
     // the rows before it is a total too, though blank after (a total since 7 am, left blank from its reset to the next tip),
     // where every wet day that stops before its end stops within one hour of the clock (at the reset; showers stop when they will)
-    const spread = T => { const s = T.map(t => t % 1440).sort((a, b) => a - b); return 1440 - s.reduce((g, t, i) => Math.max(g, i ? t - s[i - 1] : t + 1440 - s[s.length - 1]), 0); };
     const heldTo = e => { const g = e.got, L = e.list; let k = g.length - 1; while (k && g[k] - g[k - 1] === 1 && L[g[k - 1]].prcp === L[g[k]].prcp) k--; return L[g[g.length - 1]].t === null || L[g[k]].t === null ? 0 : L[g[g.length - 1]].t - L[g[k]].t + stepT; };
     const wetDays = days.map((e, j) => j).filter(j => days[j].list.some(r => r.prcp > 0)), early = wetDays.filter(j => !atEnd(days[j])).map(j => days[j].list[days[j].got[days[j].got.length - 1]].t);
     const together = early.every(t => t !== null) && (early.length < 2 || spread(early) <= 60);
@@ -941,7 +1076,7 @@ WG.models = (function () {
     const fromTip = j => { const g = days[j].got; return g.length > 1 && (g[0] >= gap || quick && heldTo(days[j]) >= 180) && g[g.length - 1] - g[0] === g.length - 1 && g[g.length - 1] === days[j].list.length - 1; };
     // (the file's first or last day given on one row only, the day before's total or a lone midnight row, says nothing of it)
     const toEnd = wetDays.every(ends), tipDays = wetDays.filter(j => days[j].got.length > 1 || j && j < days.length - 1);
-    const running = sub && !once.prcp && !accum && !drops && ((rises >= 3 && (wetThru || !flat)) || ((rises >= 1 || tipDays.length && tipDays.every(fromTip)) && (says || (heldFlat && toEnd))));
+    const running = sub && !once.prcp && !accum && !blankR && !drops && ((rises >= 3 && (wetThru || !flat)) || ((rises >= 1 || tipDays.length && tipDays.every(fromTip)) && (says || (heldFlat && toEnd))));
     /* the falls at one hour, once a day, and one at least after a climb in steps (tips adding up: drizzle jumps to its rate and
        stays), or each after the total was held over a midnight (or from before the file's start), or all within one hour of
        the clock, each after a value held three hours, where the rises before them began at other hours (rain that starts when
@@ -956,21 +1091,25 @@ WG.models = (function () {
     const oneHour = falls.some(f => f.t === null) || (falls.length === 1 ? falls[0].climb >= 2 || (quick ? stood(falls[0]) || last > 0 && heldTo(fin) >= 180 && (falls[0].lag || climb > 1 || climb > 0 && last !== falls[0].top) : falls[0].lead)
       : new Set(falls.map(f => f.d)).size === falls.length && spread(falls.map(f => f.t)) <= 120 && (falls.some(f => f.climb >= 2) || falls.every(f => f.over)
         || spread(falls.map(f => f.t)) <= 60 && falls.every(stood) && (falls.some(f => f.from === null) || spread(falls.map(f => f.from)) > 60)));
-    const resets = sub && !once.prcp && !accum && !!drops && (says || (heldFlat && oneHour));
-    if (resets || accum) { // in time order, across days
+    const resets = sub && !once.prcp && !accum && !blankR && !!drops && (says || (heldFlat && oneHour));
+    if (resets || accum || blankR) { // in time order, across days
       let before = null, at = null;
+      // (by its name, a total given only when it changes: its dry hours written 0 add nothing, and only days missing from the
+      // file are gaps, not days of rows left blank)
+      const missed = d => { if (!byName || !sparse) return d - at > 1; for (let x = at + 1; x < d; x++) if (!perDay.has(x)) return true; return false; };
       days.forEach((e, j) => e.list.forEach(r => {
-        if (r.prcp === null) return;
+        if (r.prcp === null) { if (blankR && !gapF.has(r) && !heldB.has(r)) before = 0; return; } // (a total left blank while it is 0; not a reading missing or a value held through an outage)
         const v = r.prcp;
+        if (byName && r.dry0) { r.prcp = 0; at = dayKeys[j]; return; }
         // a season's total that rose over missing days rose by their rain, not this day's
-        if (before === null || (accum && dayKeys[j] - at > 1)) r.prcp = 0;
+        if (before === null || (accum && missed(dayKeys[j]))) r.prcp = 0;
         else if (v >= before) r.prcp = v - before;
-        else if (accum && (10 * v >= 9 * before || r.dip)) { r.prcp = 0; at = dayKeys[j]; return; } // a dip, as a weighing gauge's total wavers: rain is a rise past its highest
+        else if (accum && (byRows ? 10 * v >= 9 * before || r.dip : r.waver)) { r.prcp = 0; at = dayKeys[j]; return; } // a dip, as a weighing gauge's total wavers: rain is a rise past its highest
         else r.prcp = v;
         before = v; at = dayKeys[j];
       }));
     }
-    days.forEach(e => e.list.forEach(r => { delete r.dip; }));
+    days.forEach(e => e.list.forEach(r => { delete r.dip; delete r.dry0; delete r.waver; }));
     const accumDay = !sub && season; // daily rows of a season's total
     // NRCS SCAN and SNOTEL give the total at each day's start, so what it rose by to the next day's start fell on the day
     const sod = accumDay && /start of (the )?day/i.test(head[C.prcp]);
@@ -1023,10 +1162,10 @@ WG.models = (function () {
     if (sub && back) notes.push("The rows run newest first, so each day's rows were put in time order before the day was summarised.");
     if (repeat.length && sub) {
       const few = counts.filter(k => k < usual / 2).length;
-      notes.push(`${plural(repeat.length, "day appears", "days appear")} more than once, as the rows run through the day, so each day is summarised: the highest Tmax, the lowest Tmin, the rain ${once.prcp ? "as the one value on its rows" : running ? "at its largest" : resets || accum ? "from what it rose by" : "added up"}, ${C.srad < 0 ? "" : `solar radiation ${once.srad ? "as the one value on its rows" : energy ? "added up" : "averaged"}, `}and the mean of the rest.${few ? ` ${plural(few, "day has", "days have")} under half the usual ${usual} rows, so ${few === 1 ? "it reads" : "they read"} from part of a day.` : ""}`);
+      notes.push(`${plural(repeat.length, "day appears", "days appear")} more than once, as the rows run through the day, so each day is summarised: the highest Tmax, the lowest Tmin, the rain ${once.prcp ? "as the one value on its rows" : running ? "at its largest" : resets || accum || blankR ? "from what it rose by" : "added up"}, ${C.srad < 0 ? "" : `solar radiation ${once.srad ? "as the one value on its rows" : energy ? "added up" : "averaged"}, `}and the mean of the rest.${few ? ` ${plural(few, "day has", "days have")} under half the usual ${usual} rows, so ${few === 1 ? "it reads" : "they read"} from part of a day.` : ""}`);
       if (running) notes.push(`${name(C.prcp)} only rises within each day, so it was taken as a running daily total.`);
-      if (resets) notes.push(`${name(C.prcp)} was taken as a running total that resets at some hour, so each row adds what it rose by.`);
-      if (accum) notes.push(`${name(C.prcp)} keeps adding up from day to day (a running total since a season's start${cuts.length ? ", reset once a year" : ""}), so each day's rain is what it rose by from the day before.`);
+      if (resets || blankR) notes.push(`${name(C.prcp)} was taken as a running total that resets at some hour, so each row adds what it rose by${blankR ? " (it is left blank while it is 0, as it goes blank after holding its value, which no season's total does: the first reading after blank rows adds all it holds)" : ""}.`);
+      if (accum) notes.push(`${name(C.prcp)} keeps adding up from day to day (a running total since a season's start${(byRows ? cuts : cutN).length ? ", reset once a year" : ""}${byRows ? "" : ", as its name says"}), so each day's rain is what it rose by from the day before.`);
       if (once.prcp) notes.push(`${name(C.prcp)} holds one value through each day, so it was taken as that day's rain.`);
     } else if (repeat.length) notes.push(`${plural(repeat.length, "day appears", "days appear")} more than once (is this a daily file?); each column's last value on the day is used.`);
     if (accumDay) notes.push(`${name(C.prcp)} never falls${dayCuts.length ? " but at a yearly reset" : ""} and holds its value over dry days, so it was taken as a running total since a season's start: each day's rain is what it rose by ${sod ? "to the next day's start" : "from the day before"}, and a day next to a missing one (or the file's ${sod ? "last" : "first"}) is left as a gap.`);
